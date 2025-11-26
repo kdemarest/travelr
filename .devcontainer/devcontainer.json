@@ -1,0 +1,32 @@
+{
+  "name": "Travelr Dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "remoteUser": "node",
+  "workspaceFolder": "/workspaces/travelr",
+  "postCreateCommand": "npm install",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "npm.enableRunFromFolder": true,
+        "editor.formatOnSave": true
+      },
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  },
+  "forwardPorts": [4000, 5173],
+  "portsAttributes": {
+    "4000": {
+      "label": "Travelr API"
+    },
+    "5173": {
+      "label": "Travelr Client"
+    }
+  }
+}

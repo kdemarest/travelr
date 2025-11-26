@@ -2,6 +2,8 @@
 
 Travelr is a personal trip planner with a Node.js + TypeScript API (`server/`) and a lit-based TypeScript client (`client/`). The backend replays slash-command journals to rebuild a `TripModel`, while the frontend will evolve into a column-based UI for inspecting and editing activities.
 
+> **New or returning developer?** Start with `devenvsetup/README.md` to rebuild the Docker-based development environment on Windows before following the steps below.
+
 ## Prerequisites
 
 - Node.js 20.9+ (includes npm 10+)

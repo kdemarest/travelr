@@ -7,11 +7,9 @@
 
 import fs from "fs-extra";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { Paths } from "./data-paths.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const dataConfigDir = path.resolve(__dirname, "../../dataConfig");
+const dataConfigDir = Paths.dataConfig;
 
 interface ServerConfig {
   serveMode?: "dev" | "prod";
@@ -19,6 +17,7 @@ interface ServerConfig {
   port?: number;
   vitePort?: number;
   writeDiagnosticFiles?: boolean;
+  hotReloadAllowed?: boolean;
 }
 
 let cachedConfig: ServerConfig | null = null;
@@ -86,4 +85,20 @@ export function getServerPort(): number {
 export function shouldExpressServeStatic(): boolean {
   const config = getConfig();
   return config.whoServesStaticFiles === "express";
+}
+
+/**
+ * Get the dataTrips directory path.
+ */
+export function getDataTripsDir(): string {
+  return Paths.dataTrips;
+}
+
+/**
+ * Check if hot reload is allowed.
+ * Must be explicitly enabled in config for security.
+ */
+export function isHotReloadAllowed(): boolean {
+  const config = getConfig();
+  return config.hotReloadAllowed === true;
 }

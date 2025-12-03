@@ -1,1 +1,27 @@
-{}
+{
+  "ken": {
+    "device-716980449a5543de": {
+      "authKey": "auth-12ef687624b9ec948907ea1f892574cdb97b88d612da2ecbffc2161a3e38c31f",
+      "label": "Windows / Chrome",
+      "city": "localhost",
+      "firstSeen": "2025-12-01",
+      "lastSeen": "2025-12-03"
+    },
+    "device-a00cb13cf7f343ac": {
+      "authKey": "auth-98f4dbdbfa3da49937f4f6cc0c433a33e730be6399727c85bc8b4a025b13d69b",
+      "label": "Windows / Chrome",
+      "city": "localhost",
+      "firstSeen": "2025-12-02",
+      "lastSeen": "2025-12-02"
+    }
+  },
+  "deploybot": {
+    "device-test-hot-reload": {
+      "authKey": "auth-1c35c755768c2204d1be9828d21a31ae5dd931d269e0408c2e844b2d84bfd487",
+      "label": "unknown device",
+      "city": "localhost",
+      "firstSeen": "2025-12-03",
+      "lastSeen": "2025-12-03"
+    }
+  }
+}

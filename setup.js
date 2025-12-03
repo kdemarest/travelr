@@ -14,7 +14,8 @@ import { platform } from "node:os";
 
 const ENV_VARS = [
   { name: "TRAVELR_CONFIG", purpose: "Environment config selector" },
-  { name: "TRAVELR_DEPLOYBOT_PWD", purpose: "Deploybot user password for admin operations" },
+  { name: "TRAVELR_DEPLOYBOT_PWD", purpose: "Deploybot password for deploy script admin operations" },
+  { name: "TRAVELR_TESTBOT_PWD", purpose: "Test user password for running auth unit tests" },
   { name: "OPENAI_API_KEY", purpose: "ChatGPT integration" },
   { name: "GOOGLE_CS_API_KEY", purpose: "Google Custom Search" },
   { name: "GOOGLE_CS_CX", purpose: "Google Programmable Search Engine ID" }

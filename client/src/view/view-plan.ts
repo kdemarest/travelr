@@ -39,7 +39,7 @@ function deriveIndicators(summary: DaySummary | undefined, activities: Activity[
       hasRentalCar: summary.hasRentalCar,
       rentalCarBooked: summary.rentalCarBooked,
       lodgingStatus,
-      lodgingCity: summary.lodgingCity,
+      lodgingCity: summary.lodgingCity ?? undefined,
       mealCount: summary.mealsDiningOut,
       mealsNeedingReservation: summary.mealsNeedingReservation,
       hasDateMismatchIssue: Boolean(summary.issueActivitiesWithMismatchedBookingDates),
@@ -63,10 +63,10 @@ function deriveIndicators(summary: DaySummary | undefined, activities: Activity[
   }
 
   // Try to get city from first lodging activity
-  const lodgingCity = lodgings.length > 0 ? (lodgings[0] as Record<string, unknown>).city as string | undefined : undefined;
+  const lodgingCity = lodgings.length > 0 ? lodgings[0].city : undefined;
 
   const mealsNeedingRes = meals.filter(m => {
-    const needsRes = (m as Record<string, unknown>).reservationNeeded;
+    const needsRes = m.reservationNeeded;
     const status = m.status;
     return needsRes === true && status !== "booked" && status !== "completed";
   }).length;

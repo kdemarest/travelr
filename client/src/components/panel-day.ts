@@ -27,6 +27,7 @@ export class PanelDay extends LitElement {
   @property({ type: Boolean }) issueNoTransportToLodging = false;
   @property({ type: Boolean }) issueNoTransportToFlight = false;
   @property({ attribute: false }) mismatchedUids: Set<string> = new Set();
+  @property({ attribute: false, hasChanged: () => true }) activityUidsWithAlarms: Set<string> = new Set();
   @state() private draggingUid: string | null = null;
   @state() private dropTargetIndex: number | null = null;
 
@@ -42,7 +43,7 @@ export class PanelDay extends LitElement {
     planDisplay: string | null;
   } | null = null;
 
-  static styles = css`
+  static styles = [indicatorSlotStyles, css`
     :host {
       display: flex;
       flex-direction: column;
@@ -258,7 +259,7 @@ export class PanelDay extends LitElement {
       transform: scale(0.85);
       font-size: 0.9em;
     }
-  `;
+  `];
 
   render() {
     return html`
@@ -491,6 +492,15 @@ export class PanelDay extends LitElement {
     const hasMismatch = this.mismatchedUids.has(activity.uid);
     const reservationNeeded = (activity as unknown as Record<string, unknown>).reservationNeeded === true;
     const noTransportBefore = this.checkNoTransportBefore(activity);
+    const hasAlarm = this.activityUidsWithAlarms.has(activity.uid);
+
+    const onAlarmToggle = () => {
+      this.dispatchEvent(new CustomEvent("panel-day-alarm-toggle", {
+        bubbles: true,
+        composed: true,
+        detail: { activityUid: activity.uid, hasAlarm }
+      }));
+    };
 
     return html`<div class="activity-indicator-slots">
       ${renderActivityIndicatorSlots({
@@ -499,7 +509,8 @@ export class PanelDay extends LitElement {
         hasMismatch,
         reservationNeeded,
         noTransportBefore,
-      })}
+        hasAlarm,
+      }, onAlarmToggle)}
     </div>`;
   }
 

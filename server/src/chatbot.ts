@@ -3,30 +3,26 @@
  * and chaining for multi-turn conversations (e.g., after websearch)
  */
 
-import type { TripDocService } from "./tripdoc.js";
-import type { ConversationStore } from "./conversation.js";
-import type { JournalService } from "./journal.js";
+import type { TripCache } from "./trip-cache.js";
+import type { Conversation } from "./conversation.js";
 import type { TripModel } from "./types.js";
+import type { UserPreferences } from "./user-preferences.js";
 import { getActiveModel, sendChatCompletion } from "./gpt.js";
-import { getDefaultUserPreferences } from "./user-preferences.js";
 import { finalizeModel } from "./finalize-model.js";
 import { gptQueue, type GptQueueResult } from "./gpt-queue.js";
 import { parseChatPieces, isCommandPiece } from "./chat-pieces.js";
-import { parseCommand } from "./command.js";
+import { CommandWithArgs, parseCommand } from "./command.js";
 import { executeMarkCommand } from "./cmd-mark.js";
-import { normalizeCommandLine, augmentCommandLine } from "./normalize.js";;
-import { computeJournalTimeline } from "./tripdoc.js";
+import { normalizeCommandLine } from "./normalize.js";
+import { rebuildModel } from "./journal-state.js";
 import { generateUid } from "./uid.js";
-import { cmdWebsearch } from "./cmd-websearch.js";
 import { isJournalableCommand, isChatbotExecutable, requiresChaining } from "./command-meta.js";
 
 // Context needed for GPT calls and command execution
 export interface ChatbotContext {
   tripName: string;
-  tripDocService: TripDocService;
-  journalService: JournalService;
-  conversationStore: ConversationStore;
-  dataDir: string;
+  tripCache: TripCache;
+  userPreferences: UserPreferences;
   focusSummary?: { focusedDate?: string | null; focusedActivityUid?: string | null };
   markedActivities?: unknown;
   markedDates?: unknown;
@@ -85,20 +81,20 @@ async function executeGptTask(
     
     for (const piece of commandPieces) {
       const line = piece.piece;
-      const parsed = parseCommand(line);
-      if (!parsed || !isChatbotExecutable(parsed.type)) continue;
+      const parsed = parseCommand(new CommandWithArgs(line));
+      if (!parsed || !isChatbotExecutable(parsed.commandId)) continue;
       
-      if (requiresChaining(parsed.type)) {
+      if (requiresChaining(parsed.commandId)) {
         needsChaining = true;
       }
       
       try {
-        if (isJournalableCommand(parsed.type)) {
+        if (isJournalableCommand(parsed.commandId)) {
           const result = await executeGptCommand(line, ctx);
           if (result.model) {
             updatedModel = result.model;
           }
-        } else if (isMarkCommand(parsed.type) && parsed.type === "mark") {
+        } else if (isMarkCommand(parsed.commandId) && parsed.commandId === "mark") {
           console.log("Executing mark command:", line);
           const markResult = executeMarkCommand(parsed, markedActivities, markedDates);
           console.log("Mark result:", markResult);
@@ -114,14 +110,15 @@ async function executeGptTask(
         }
         executedCount++;
       } catch (err) {
-        console.error(`GPT ${parsed.type} command failed`, err);
+        console.error(`GPT ${parsed.commandId} command failed`, err);
       }
     }
     
     // If any command requires chaining, enqueue a follow-up GPT call
     if (needsChaining) {
       // For chained calls, read fresh history (includes GPT response + search results)
-      const freshHistory = await ctx.conversationStore.read(ctx.tripName);
+      const freshTrip = await ctx.tripCache.getTrip(ctx.tripName);
+      const freshHistory = freshTrip.conversation.read();
       const nextCtx: ChatbotContext = {
         ...ctx,
         currentModel: updatedModel,
@@ -181,22 +178,21 @@ async function callGptWithContext(
   userInput: string,
   ctx: ChatbotContext
 ): Promise<{ text: string; model: string }> {
-  const { tripName, tripDocService, conversationStore, focusSummary, markedActivities, markedDates, currentModel, conversationHistory } = ctx;
+  const { tripName, tripCache, userPreferences, focusSummary, markedActivities, markedDates, currentModel, conversationHistory } = ctx;
 
   // Use provided model or fetch fresh, always finalize for prompt
   let model: TripModel;
   if (currentModel) {
-    model = await finalizeModel(currentModel);
+    model = finalizeModel(currentModel);
   } else {
-    const existing = await tripDocService.getExistingModel(tripName);
-    if (!existing) {
+    if (!(await tripCache.tripExists(tripName))) {
       throw new Error(`Trip ${tripName} does not exist.`);
     }
-    model = await finalizeModel(existing);
+    const existingTrip = await tripCache.getTrip(tripName);
+    const existing = rebuildModel(existingTrip);
+    model = finalizeModel(existing);
   }
 
-  const userPreferences = await getDefaultUserPreferences();
-  
   const normalizedMarks = normalizeMarkedArray(markedActivities);
   const normalizedDates = normalizeMarkedArray(markedDates);
   const mergedFocusSummary = JSON.stringify({
@@ -221,7 +217,8 @@ async function callGptWithContext(
 
   // Append GPT response to conversation
   const modelName = getActiveModel();
-  await conversationStore.append(tripName, `GPT (${modelName}): ${result.text}`);
+  const tripForConv = await tripCache.getTrip(tripName);
+  tripForConv.conversation.append(`GPT (${modelName}): ${result.text}`);
 
   return { text: result.text, model: modelName };
 }
@@ -250,20 +247,22 @@ async function executeWebsearchFromGpt(
   ctx: ChatbotContext
 ): Promise<void> {
   // Parse the command properly
-  const parsed = parseCommand(commandLine);
-  if (!parsed || parsed.type !== "websearch") {
+  const parsed = parseCommand(new CommandWithArgs(commandLine));
+  if (!parsed || parsed.commandId !== "websearch") {
     return;
   }
   
-  // Use the websearch handler
-  const response = await cmdWebsearch(parsed);
+  // Use the search handler directly
+  const { handleGoogleSearch } = await import("./search.js");
+  const query = (parsed as { query: string }).query;
+  const { snippets } = await handleGoogleSearch(query);
   
   // Append results to conversation
-  if (response.body.searchResults) {
-    const results = response.body.searchResults as string[];
-    const summary = formatSearchResultsForConversation(results);
+  if (snippets.length > 0) {
+    const summary = formatSearchResultsForConversation(snippets);
     if (summary) {
-      await ctx.conversationStore.append(ctx.tripName, summary);
+      const searchTrip = await ctx.tripCache.getTrip(ctx.tripName);
+      searchTrip.conversation.append(summary);
     }
   }
 }
@@ -275,34 +274,21 @@ async function executeGptCommand(
   commandLine: string,
   ctx: ChatbotContext
 ): Promise<{ model?: TripModel }> {
-  const parsed = parseCommand(commandLine);
+  const parsed = parseCommand(new CommandWithArgs(commandLine));
   if (!parsed) {
     return {};
   }
   
-  // Normalize and augment the command
-  const normalizationOptions = {
-    focus: { focusedActivityUid: ctx.focusSummary?.focusedActivityUid ?? null },
-    referenceDate: new Date()
-  };
-  const normalized = normalizeCommandLine(commandLine, normalizationOptions);
-  
-  // Get timeline state for augmentation
-  const entries = await ctx.tripDocService.getJournalEntries(ctx.tripName);
-  const getNextLineNumber = () => (entries[entries.length - 1]?.lineNumber ?? 0) + 1;
-  
-  const augmented = augmentCommandLine(normalized, generateUid, getNextLineNumber);
-  const augmentedParsed = parseCommand(augmented);
-  if (!augmentedParsed) {
-    return {};
-  }
+  // Normalize the command (returns a Command object)
+  const commandObj = normalizeCommandLine(commandLine);
   
   // Write to journal
-  await ctx.journalService.appendCommand(ctx.tripName, augmentedParsed, augmented);
+  const cmdTrip = await ctx.tripCache.getTrip(ctx.tripName);
+  await cmdTrip.journal.appendCommand(commandObj, commandObj.toString());
   
   // Rebuild model with full finalization
-  const model = await ctx.tripDocService.rebuildModel(ctx.tripName);
-  const finalizedModel = await finalizeModel(model);
+  const model = rebuildModel(cmdTrip);
+  const finalizedModel = finalizeModel(model);
   
   return { model: finalizedModel };
 }

@@ -1,38 +1,43 @@
-import type { ParsedCommand, TripCommand } from "./command.js";
-import type { CommandResponse } from "./cmd-help.js";
-import { TripDocService } from "./tripdoc.js";
-import { finalizeModel } from "./finalize-model.js";
+import type { TripCommand } from "./command-types.js";
+import { getTripCache } from "./trip-cache.js";
+import { registerCommand } from "./command-registry.js";
+import type { CommandHandlerResult } from "./command-context.js";
+import { CommandWithArgs } from "./command.js";
 
-export async function cmdTrip(
-  parsed: ParsedCommand,
-  tripDocService: TripDocService
-): Promise<CommandResponse> {
-  if (parsed.type !== "trip") {
-    throw new Error("cmdTrip called with non-trip command");
+
+function cmdTrip()
+{
+  function parseTrip(command: CommandWithArgs): TripCommand {
+    return { commandId: "trip", target: command.args.target?.trim() || undefined };
   }
 
-  const target = parsed.target;
-  const trips = await tripDocService.listTrips();
-  const listMessage = trips.length ? `Existing trips: ${trips.join(", ")}` : "No trips have been created yet.";
+  async function handleTrip(
+    command: CommandWithArgs,
+  ): Promise<CommandHandlerResult> {
+    const parsed = parseTrip(command);
+    const tripCache = getTripCache();
+    const target = parsed.target;
+    const trips = await tripCache.listTrips();
+    const listMessage = trips.length ? `Existing trips: ${trips.join(", ")}` : "No trips have been created yet.";
 
-  if (!target) {
+    if (!target) {
+      return { message: listMessage };
+    }
+
+    if (await tripCache.tripExists(target)) {
+      // Return switchTrip to signal the command loop to switch to this trip
+      // The actual switch, lastTripId update, and model load happen in the loop
+      return {
+        switchTrip: { tripId: target }
+      };
+    }
+
     return {
-      status: 200,
-      body: { ok: true, executedCommands: 0, message: listMessage, trips }
+      message: `Trip ${target} not found. ${listMessage}`,
+      stopProcessingCommands: true
     };
   }
 
-  const model = await tripDocService.getExistingModel(target);
-  if (model) {
-    const finalizedModel = await finalizeModel(model);
-    return {
-      status: 200,
-      body: { ok: true, executedCommands: 0, message: `Now editing ${target}`, model: finalizedModel, trips }
-    };
-  }
-
-  return {
-    status: 404,
-    body: { error: `Trip ${target} not found. ${listMessage}`, trips }
-  };
+  return { commandId: "trip", positionalKey: "target", parser: parseTrip, handler: handleTrip };
 }
+registerCommand(cmdTrip());

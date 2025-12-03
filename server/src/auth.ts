@@ -1,23 +1,33 @@
 /**
  * Simple authentication module with multi-device support.
  * 
- * - users.json: { username: { password, isAdmin } } pairs
- * - auths.json: { username: { deviceId: { authKey, label, city, firstSeen, lastSeen } } }
+ * - users.json: { userId: { password, isAdmin } } pairs
+ * - auths.json: { userId: { deviceId: { authKey, label, city, firstSeen, lastSeen } } }
  * 
  * Auth flow:
- * 1. Client tries GET /auth?user=X&deviceId=Y&authKey=Z (cached key)
- * 2. If no cached key or invalid, client POSTs /auth with { user, password, deviceId, deviceInfo }
+ * 1. Client tries GET /auth?userId=X&deviceId=Y&authKey=Z (cached key)
+ * 2. If no cached key or invalid, client POSTs /auth with { userId, password, deviceId, deviceInfo }
  * 3. On success, server returns { authKey } which client stores in localStorage
- * 4. All API requests include authKey, user, and deviceId in headers
+ * 4. All API requests include authKey, userId, and deviceId in headers
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { LazyFile } from "./lazy-file.js";
+import type { User } from "./user.js";
+import { ensureUserPrefsFile } from "./user-preferences.js";
+import { ClientDataCache } from "./client-data-cache.js";
+import { Paths } from "./data-paths.js";
 
-const DATA_DIR = process.env.DATA_USERS_DIR || path.join(process.cwd(), "dataUsers");
-const USERS_FILE = path.join(DATA_DIR, "users.json");
-const AUTHS_FILE = path.join(DATA_DIR, "auths.json");
+const USERS_FILE = path.join(Paths.dataUsers, "users.json");
+const AUTHS_FILE = path.join(Paths.dataUsers, "auths.json");
+const USER_STATE_FILE = path.join(Paths.dataUsers, "userState.json");
+
+// Per-user state (survives across devices)
+interface UserState {
+  lastTripId?: string;
+}
+type UserStateFile = Record<string, UserState>;
 
 interface UserEntry {
   password: string;
@@ -34,66 +44,86 @@ interface DeviceAuth {
 
 type UsersFile = Record<string, UserEntry | string>;  // Support both old and new format
 type UserAuths = Record<string, DeviceAuth>;  // deviceId -> DeviceAuth
-type AuthsFile = Record<string, UserAuths>;   // user -> UserAuths
+type AuthsFile = Record<string, UserAuths>;   // userId -> UserAuths
 
-// Ensure directory exists
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
+// JSON helpers
+const parseJson = <T>(text: string): T => JSON.parse(text);
+const toJson = <T>(data: T): string => JSON.stringify(data, null, 2);
+
+// LazyFile instances for each data file
+const usersFile = new LazyFile<UsersFile>(USERS_FILE, {}, parseJson, toJson);
+const authsFile = new LazyFile<AuthsFile>(AUTHS_FILE, {}, parseJson, toJson);
+const userStateFile = new LazyFile<UserStateFile>(USER_STATE_FILE, {}, parseJson, toJson);
+
+/**
+ * Initialize the auth module. Call once at startup.
+ */
+export function initAuth(): void {
+  usersFile.load();
+  authsFile.load();
+  userStateFile.load();
 }
 
-// Load users from file
-function loadUsers(): UsersFile {
-  try {
-    const data = fs.readFileSync(USERS_FILE, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
+/**
+ * Flush all pending writes. Call on shutdown.
+ */
+export function flushAuth(): void {
+  usersFile.flush();
+  authsFile.flush();
+  userStateFile.flush();
 }
 
 // Get password for a user (handles both old string format and new object format)
-function getUserPassword(users: UsersFile, user: string): string | null {
-  const entry = users[user];
+function getUserPassword(users: UsersFile, userId: string): string | null {
+  const entry = users[userId];
   if (!entry) return null;
   if (typeof entry === "string") return entry;  // Old format
   return entry.password;  // New format
 }
 
 // Check if user is admin
-function isUserAdmin(users: UsersFile, user: string): boolean {
-  const entry = users[user];
+function isUserAdmin(users: UsersFile, userId: string): boolean {
+  const entry = users[userId];
   if (!entry) return false;
   if (typeof entry === "string") return false;  // Old format = not admin
   return entry.isAdmin === true;
 }
 
 // Export for use in admin routes
-export function checkIsAdmin(user: string): boolean {
-  const users = loadUsers();
-  return isUserAdmin(users, user);
-}
-
-// Load auth keys from file
-function loadAuths(): AuthsFile {
-  try {
-    const data = fs.readFileSync(AUTHS_FILE, "utf-8");
-    return JSON.parse(data);
-  } catch {
-    return {};
-  }
-}
-
-// Save auth keys to file
-function saveAuths(auths: AuthsFile): void {
-  ensureDataDir();
-  fs.writeFileSync(AUTHS_FILE, JSON.stringify(auths, null, 2));
+export function checkIsAdmin(userId: string): boolean {
+  return isUserAdmin(usersFile.data, userId);
 }
 
 // Generate a random auth key
 function generateAuthKey(): string {
   return "auth-" + randomBytes(32).toString("hex");
+}
+
+/**
+ * Get the last trip ID for a user.
+ */
+export function getLastTripId(userId: string): string | null {
+  const state = userStateFile.data;
+  return state[userId]?.lastTripId ?? null;
+}
+
+/**
+ * Set the last trip ID for a user.
+ * Only marks dirty if the value actually changed.
+ */
+export function setLastTripId(userId: string, tripId: string): void {
+  const state = userStateFile.data;
+  
+  // Only mark dirty if the value is different
+  if (state[userId]?.lastTripId === tripId) {
+    return;
+  }
+  
+  if (!state[userId]) {
+    state[userId] = {};
+  }
+  state[userId].lastTripId = tripId;
+  userStateFile.setDirty(state);
 }
 
 // ============================================================================
@@ -167,14 +197,14 @@ async function lookupCity(ip: string): Promise<string> {
  * Returns an authKey if valid, null if invalid.
  */
 export async function login(
-  user: string, 
+  userId: string, 
   password: string, 
   deviceId: string, 
   deviceInfo: string,
   ip: string
 ): Promise<string | null> {
-  const users = loadUsers();
-  const storedHash = getUserPassword(users, user);
+  const users = usersFile.data;
+  const storedHash = getUserPassword(users, userId);
   
   if (!storedHash) {
     return null;
@@ -195,34 +225,41 @@ export async function login(
   
   // Generate and store auth key
   const authKey = generateAuthKey();
-  const auths = loadAuths();
+  const auths = authsFile.data;
   
-  if (!auths[user]) {
-    auths[user] = {};
+  if (!auths[userId]) {
+    auths[userId] = {};
   }
   
   const now = today();
-  auths[user][deviceId] = {
+  auths[userId][deviceId] = {
     authKey,
     label: deviceInfo || "unknown device",
     city,
-    firstSeen: auths[user][deviceId]?.firstSeen || now,
+    firstSeen: auths[userId][deviceId]?.firstSeen || now,
     lastSeen: now
   };
   
-  saveAuths(auths);
+  authsFile.setDirty(auths);
   
   return authKey;
 }
 
 /**
- * Validate an existing authKey.
- * Returns the username if valid, null if invalid.
- * Also updates lastSeen.
+ * Authentication result from authenticateAndFetchUser.
  */
-export function validateAuthKey(user: string, deviceId: string, authKey: string): string | null {
-  if (!user || !deviceId || !authKey) {
-    return null;
+export interface AuthResult {
+  valid: boolean;
+  user: User | null;
+}
+
+/**
+ * Validate an existing authKey and return the authenticated user.
+ * Also updates lastSeen on successful auth.
+ */
+export function authenticateAndFetchUser(userId: string, deviceId: string, authKey: string): AuthResult {
+  if (!userId || !deviceId || !authKey) {
+    return { valid: false, user: null };
   }
   
   // Ensure proper prefixes
@@ -230,47 +267,59 @@ export function validateAuthKey(user: string, deviceId: string, authKey: string)
     deviceId = "device-" + deviceId;
   }
   if (!authKey.startsWith("auth-")) {
-    return null;
+    return { valid: false, user: null };
   }
   
-  const auths = loadAuths();
-  const deviceAuth = auths[user]?.[deviceId];
+  const auths = authsFile.data;
+  const deviceAuth = auths[userId]?.[deviceId];
   
   if (deviceAuth?.authKey === authKey) {
     // Update lastSeen
     deviceAuth.lastSeen = today();
-    saveAuths(auths);
-    return user;
+    authsFile.setDirty(auths);
+    
+    // Load user prefs on first access
+    const prefs = ensureUserPrefsFile(userId);
+    
+    return {
+      valid: true,
+      user: {
+        userId,
+        isAdmin: isUserAdmin(usersFile.data, userId),
+        prefs,
+        clientDataCache: new ClientDataCache()
+      }
+    };
   }
   
-  return null;
+  return { valid: false, user: null };
 }
 
 /**
  * Logout a user's device by removing their auth key.
  */
-export function logout(user: string, deviceId: string): void {
+export function logout(userId: string, deviceId: string): void {
   if (!deviceId.startsWith("device-")) {
     deviceId = "device-" + deviceId;
   }
   
-  const auths = loadAuths();
-  if (auths[user]) {
-    delete auths[user][deviceId];
+  const auths = authsFile.data;
+  if (auths[userId]) {
+    delete auths[userId][deviceId];
     // Clean up empty user entries
-    if (Object.keys(auths[user]).length === 0) {
-      delete auths[user];
+    if (Object.keys(auths[userId]).length === 0) {
+      delete auths[userId];
     }
-    saveAuths(auths);
+    authsFile.setDirty(auths);
   }
 }
 
 /**
  * Get list of devices for a user.
  */
-export function getDevices(user: string): Array<{ deviceId: string; label: string; city: string; firstSeen: string; lastSeen: string }> {
-  const auths = loadAuths();
-  const userAuths = auths[user] || {};
+export function getDevices(userId: string): Array<{ deviceId: string; label: string; city: string; firstSeen: string; lastSeen: string }> {
+  const auths = authsFile.data;
+  const userAuths = auths[userId] || {};
   
   return Object.entries(userAuths).map(([deviceId, auth]) => ({
     deviceId,
@@ -282,9 +331,14 @@ export function getDevices(user: string): Array<{ deviceId: string; label: strin
 }
 
 /**
- * Check if auth is enabled (users.json has at least one user).
+ * Check if the auth system is properly configured (has at least one user).
+ * If this returns false, the server should refuse to start.
  */
-export function isAuthEnabled(): boolean {
-  const users = loadUsers();
-  return Object.keys(users).length > 0;
+export function isAuthConfigured(): boolean {
+  const users = usersFile.data;
+  const hasUsers = Object.keys(users).length > 0;
+  if (!hasUsers) {
+    console.error("[isAuthConfigured] FATAL: No users configured in", USERS_FILE);
+  }
+  return hasUsers;
 }

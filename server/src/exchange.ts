@@ -1,5 +1,5 @@
 import type { TripModel, CountryInfo } from "./types.js";
-import { readExchangeRateCatalog } from "./exchange-rate-catalog.js";
+import { createExchangeRateCatalog } from "./exchange-rate-catalog.js";
 import type { ExchangeRateRecord } from "./exchange-rate-catalog.js";
 
 interface ExchangeRateResult {
@@ -15,36 +15,38 @@ interface ExchangeRateApiResponse {
 
 const EXCHANGE_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const EXCHANGE_API_BASE = "https://open.er-api.com/v6/latest";
-const exchangeCatalog = readExchangeRateCatalog();
+const exchangeCatalog = createExchangeRateCatalog();
 
-interface RateResolutionResult {
-  record: ExchangeRateRecord | null;
-  updatedCatalog: boolean;
+/**
+ * Load exchange rate catalog from disk. Call once at startup.
+ */
+export function loadExchangeRateCatalog(): void {
+  exchangeCatalog.load();
 }
 
-export async function refreshExchangeRatesFromOnlineSources(model: TripModel): Promise<TripModel> {
+/**
+ * Flush pending writes to disk. Call on shutdown.
+ */
+export function flushExchangeRateCatalog(): void {
+  exchangeCatalog.flush();
+}
+
+/**
+ * Sync version - applies cached exchange rates from the catalog without network calls.
+ * Use this when finalizing models for client consumption.
+ */
+export function applyExchangeRatesFromCatalog(model: TripModel): TripModel {
   if (!model.countries || model.countries.length === 0) {
     return model;
   }
 
-  let catalogDirty = false;
-  const refreshedCountries: CountryInfo[] = [];
-
-  for (const country of model.countries) {
-    const { record, updatedCatalog } = await ensureCatalogRate(country.currencyAlpha3);
-    if (updatedCatalog) {
-      catalogDirty = true;
-    }
+  const refreshedCountries: CountryInfo[] = model.countries.map((country) => {
+    const record = exchangeCatalog.get(country.currencyAlpha3);
     if (record && isValidExchangeRate(record.exchangeRateToUSD)) {
-      refreshedCountries.push({ ...country, exchangeRateToUSD: record.exchangeRateToUSD });
-    } else {
-      refreshedCountries.push(country);
+      return { ...country, exchangeRateToUSD: record.exchangeRateToUSD };
     }
-  }
-
-  if (catalogDirty) {
-    exchangeCatalog.save();
-  }
+    return country;
+  });
 
   return { ...model, countries: refreshedCountries };
 }
@@ -55,27 +57,25 @@ export async function refreshExchangeRateCatalogOnStartup(): Promise<void> {
     return;
   }
 
-  let catalogDirty = false;
   for (const record of records) {
-    const { updatedCatalog } = await ensureCatalogRate(record.currencyAlpha3);
-    if (updatedCatalog) {
-      catalogDirty = true;
-    }
+    await ensureCatalogRate(record.currencyAlpha3);
   }
-
-  if (catalogDirty) {
-    exchangeCatalog.save();
-  }
+  // Writes are scheduled by upsert via setDirty; flush at shutdown
 }
 
-export async function ensureExchangeRateForCurrency(
+/**
+ * Sync lookup of exchange rate from the in-memory catalog.
+ * Returns whatever is cached; does not fetch from network.
+ */
+export function getExchangeRateFromCatalog(
   currencyAlpha3: string | undefined | null
-): Promise<ExchangeRateRecord | null> {
-  const { record, updatedCatalog } = await ensureCatalogRate(currencyAlpha3);
-  if (updatedCatalog) {
-    exchangeCatalog.save();
-  }
-  return record;
+): ExchangeRateRecord | null {
+  return exchangeCatalog.get(currencyAlpha3);
+}
+
+interface RateResolutionResult {
+  record: ExchangeRateRecord | null;
+  updatedCatalog: boolean;
 }
 
 async function ensureCatalogRate(currencyAlpha3: string | undefined | null): Promise<RateResolutionResult> {

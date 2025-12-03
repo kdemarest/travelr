@@ -1,44 +1,50 @@
-import type { ParsedCommand } from "./command.js";
-import type { CommandResponse } from "./cmd-help.js";
+import type { ModelCommand } from "./command-types.js";
 import { getActiveModel, getAvailableModels, setActiveModel } from "./gpt.js";
+import { registerCommand } from "./command-registry.js";
+import type { CommandContext, CommandHandlerResult } from "./command-context.js";
+import { CommandWithArgs } from "./command.js";
+import { populateModelList } from "./cache-population.js";
 
-export function cmdModel(parsed: ParsedCommand): CommandResponse {
-  if (parsed.type !== "model") {
-    throw new Error("cmdModel called with non-model command");
+
+function cmdModel()
+{
+  function parseModel(command: CommandWithArgs): ModelCommand {
+    return { commandId: "model", target: command.args.target?.trim() || undefined };
   }
 
-  const target = parsed.target;
+  async function handleModel(
+    command: CommandWithArgs,
+    ctx: CommandContext
+  ): Promise<CommandHandlerResult> {
+    const parsed = parseModel(command);
+    const target = parsed.target;
 
-  if (!target) {
-    const available = getAvailableModels();
-    const current = getActiveModel();
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        executedCommands: 0,
-        message: `Available GPT models: ${available.join(", ")}. Active: ${current}.`,
-        models: available,
-        activeModel: current
-      }
-    };
+    // Update the client data cache with model info
+    populateModelList(ctx.user);
+
+    if (!target) {
+      const available = getAvailableModels();
+      const current = getActiveModel();
+      return {
+        message: `Available GPT models: ${available.join(", ")}. Active: ${current}.`
+      };
+    }
+
+    try {
+      setActiveModel(target);
+      // Update cache again after change
+      populateModelList(ctx.user);
+      return {
+        message: `ChatGPT model set to ${target}.`
+      };
+    } catch (error) {
+      return {
+        message: error instanceof Error ? error.message : String(error),
+        stopProcessingCommands: true
+      };
+    }
   }
 
-  try {
-    setActiveModel(target);
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        executedCommands: 0,
-        message: `ChatGPT model set to ${target}.`,
-        activeModel: target
-      }
-    };
-  } catch (error) {
-    return {
-      status: 400,
-      body: { error: error instanceof Error ? error.message : String(error) }
-    };
-  }
+  return { commandId: "model", positionalKey: "target", adminOnly: true, parser: parseModel, handler: handleModel };
 }
+registerCommand(cmdModel());

@@ -1,38 +1,63 @@
-import fs from "fs-extra";
-import path from "node:path";
+import { LazyFile } from "./lazy-file.js";
 
-export class ConversationStore {
-  constructor(private readonly dataDir: string) {}
+// Maximum number of messages to keep in conversation history
+const MAX_MESSAGES = 100;
 
-  private getConversationPath(tripName: string) {
-    return path.join(this.dataDir, `${tripName}.conversation`);
+/**
+ * Conversation - Represents a single trip's conversation history.
+ * 
+ * A Conversation knows its trip name and manages its own LazyFile.
+ * Uses a sliding window to keep only the most recent messages.
+ */
+export class Conversation {
+  private file: LazyFile<string[]>;
+  
+  constructor(
+    readonly tripName: string,
+    filePath: string
+  ) {
+    this.file = new LazyFile<string[]>(
+      filePath,
+      [],
+      (text) => text.split(/\r?\n/).filter(line => line.length > 0),
+      (messages) => messages.join("\n")
+    );
+    this.file.load();
   }
 
-  async read(tripName: string): Promise<string> {
-    const filePath = this.getConversationPath(tripName);
-    if (!(await fs.pathExists(filePath))) {
-      return "";
-    }
-    return fs.readFile(filePath, "utf8");
+  read(): string {
+    return this.file.data.join("\n");
   }
 
-  async write(tripName: string, contents?: string): Promise<void> {
-    const filePath = this.getConversationPath(tripName);
+  write(contents?: string): void {
+    const messages = this.file.data;
+    messages.length = 0;  // Clear in place
+    
     const data = contents ?? "";
-    if (!data.trim()) {
-      await fs.remove(filePath).catch(() => undefined);
-      return;
+    if (data.trim()) {
+      const newMessages = data.split(/\r?\n/).filter(line => line.length > 0);
+      messages.push(...newMessages);
     }
-    await fs.outputFile(filePath, data, "utf8");
+    this.file.setDirty(messages);
   }
 
-  async append(tripName: string, line: string): Promise<void> {
+  append(line: string): void {
     if (!line.trim()) {
       return;
     }
-    const filePath = this.getConversationPath(tripName);
-    const existing = await this.read(tripName);
-    const newContent = existing ? `${existing}\n${line}` : line;
-    await fs.outputFile(filePath, newContent, "utf8");
+    const messages = this.file.data;
+    
+    messages.push(line);
+    
+    // Sliding window: remove oldest messages if over limit
+    while (messages.length > MAX_MESSAGES) {
+      messages.shift();
+    }
+    
+    this.file.setDirty(messages);
+  }
+  
+  flush(): void {
+    this.file.flush();
   }
 }

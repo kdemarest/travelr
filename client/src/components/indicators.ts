@@ -5,6 +5,7 @@
  */
 
 import { html, TemplateResult, css, CSSResult } from "lit";
+import { classMap } from "lit/directives/class-map.js";
 
 // ============================================================================
 // Types
@@ -33,6 +34,8 @@ export interface ActivityIndicatorData {
   reservationNeeded?: boolean;
   /** For flights and lodging: no transport activity scheduled before this activity's time */
   noTransportBefore?: boolean;
+  /** Activity has an alarm set */
+  hasAlarm?: boolean;
 }
 
 // ============================================================================
@@ -288,9 +291,27 @@ export function renderActivityIssueSlot(data: Pick<ActivityIndicatorData, "hasMi
   </span>`;
 }
 
-/** Render all 5 indicator slots for an activity row */
-export function renderActivityIndicatorSlots(data: ActivityIndicatorData): TemplateResult {
+export function renderActivityAlarmSlot(data: Pick<ActivityIndicatorData, "hasAlarm">, onToggle?: () => void): TemplateResult {
+  const hasAlarm = data.hasAlarm === true;
+  const tooltip = hasAlarm ? "Alarm set - click to remove" : "Click to set alarm";
+  const handleClick = onToggle ? (e: Event) => { e.stopPropagation(); onToggle(); } : undefined;
+  const classes = {
+    "indicator-slot": true,
+    "indicator-clickable": true,
+    "status-black": hasAlarm,
+    "status-gray": !hasAlarm
+  };
+  return html`<span 
+    class=${classMap(classes)}
+    data-tooltip=${tooltip}
+    @click=${handleClick}
+  >${alarmIcon()}</span>`;
+}
+
+/** Render all 6 indicator slots for an activity row */
+export function renderActivityIndicatorSlots(data: ActivityIndicatorData, onAlarmToggle?: () => void): TemplateResult {
   return html`
+    ${renderActivityAlarmSlot(data, onAlarmToggle)}
     ${renderActivityFlightSlot(data)}
     ${renderActivityRentalCarSlot(data)}
     ${renderActivityLodgingSlot(data)}
@@ -420,6 +441,19 @@ export const indicatorSlotStyles: CSSResult = css`
     color: #0f172a;
   }
 
+  .indicator-slot.status-gray svg {
+    color: #94a3b8;
+  }
+
+  .indicator-slot.indicator-clickable {
+    cursor: pointer;
+  }
+
+  .indicator-slot.indicator-clickable:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 3px;
+  }
+
   .indicator-slot.status-hidden {
     visibility: hidden;
   }
@@ -472,5 +506,12 @@ export function issueIcon(): TemplateResult {
     <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/>
     <path d="M12 9v4"/>
     <path d="M12 17h.01"/>
+  </svg>`;
+}
+
+export function alarmIcon(): TemplateResult {
+  return html`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
   </svg>`;
 }

@@ -1,11 +1,11 @@
 import type { Request, Response } from "express";
-import type { TripDocService } from "./tripdoc.js";
-import type { ConversationStore } from "./conversation.js";
+import type { TripCache } from "./trip-cache.js";
+import { rebuildModel } from "./journal-state.js";
 import { finalizeModel } from "./finalize-model.js";
-import { getDefaultUserPreferences } from "./user-preferences.js";
 import { getActiveModel, sendChatCompletion } from "./gpt.js";
+import type { AuthenticatedRequest } from "./index.js";
 
-export function createChatHandler(tripDocService: TripDocService, conversationStore: ConversationStore) {
+export function createChatHandler(tripCache: TripCache) {
   return async (req: Request, res: Response) => {
     const tripName = req.params.tripName;
     const { text, focusSummary, markedActivities, markedDates } = req.body ?? {};
@@ -13,6 +13,7 @@ export function createChatHandler(tripDocService: TripDocService, conversationSt
       return res.status(400).json({ error: "Payload must include text." });
     }
 
+    const user = (req as AuthenticatedRequest).user;
     const normalizedInput = text.trim();
     const normalizedFocus = typeof focusSummary === "object" ? focusSummary : undefined;
     const normalizedMarks = normalizeMarkedActivities(markedActivities);
@@ -20,18 +21,20 @@ export function createChatHandler(tripDocService: TripDocService, conversationSt
     const mergedFocusSummary = mergeFocusSummaryWithMarks(normalizedFocus, normalizedMarks, normalizedDates);
 
     try {
-      const model = await tripDocService.getExistingModel(tripName);
-      if (!model) {
+      if (!(await tripCache.tripExists(tripName))) {
         return res.status(404).json({ error: `Trip ${tripName} does not exist.` });
       }
-      const finalizedModel = await finalizeModel(model);
-      const userPreferences = await getDefaultUserPreferences();
+      const trip = await tripCache.getTrip(tripName);
+      const model = rebuildModel(trip);
+      const finalizedModel = finalizeModel(model);
+      const userPreferences = { ...user.prefs.data };
 
       // Read conversation history from disk (authoritative source)
-      const conversationHistory = await conversationStore.read(tripName);
+      const conversation = trip.conversation;
+      const conversationHistory = conversation.read();
 
       // Append user input to conversation
-      await conversationStore.append(tripName, `User: ${normalizedInput}`);
+      conversation.append(`User: ${normalizedInput}`);
 
       const result = await sendChatCompletion(normalizedInput, {
         temperature: 0.3,
@@ -48,7 +51,7 @@ export function createChatHandler(tripDocService: TripDocService, conversationSt
 
       // Append GPT response to conversation
       const modelName = getActiveModel();
-      await conversationStore.append(tripName, `GPT (${modelName}): ${result.text}`);
+      conversation.append(`GPT (${modelName}): ${result.text}`);
 
       res.json({ ok: true, text: result.text, model: modelName });
     } catch (error) {

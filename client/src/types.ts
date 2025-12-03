@@ -20,6 +20,9 @@ export interface Activity {
   notesUser?: string;
   notesAi?: string;
   important?: boolean | string;
+  city?: string;
+  reservationNeeded?: boolean;
+  [key: string]: unknown;
 }
 
 export interface CountryInfo {
@@ -66,6 +69,20 @@ export interface TripModel {
   activities: Activity[];
   countries?: CountryInfo[];
   daySummaries?: DaySummary[];
+  alarms?: Alarm[];
+}
+
+export interface Alarm {
+  uid: string;
+  tripId: string;
+  activityUid?: string;
+  minutesBefore?: number;
+  date?: string;
+  time?: string;
+  label: string;
+  location?: string;
+  enabled: boolean;
+  dismissed?: boolean;
 }
 
 export type PlanLine =

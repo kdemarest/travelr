@@ -1,21 +1,20 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { getSecretOptional, isSecretAvailable } from "./secrets.js";
 import { formatDaySummariesForPrompt } from "./day-summary.js";
 import { isWebSearchAvailable } from "./search.js";
 import { shouldWriteDiagnostics } from "./config.js";
+import { Paths } from "./data-paths.js";
 import type { TripModel } from "./types.js";
 
 const OPENAI_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 export const DEFAULT_MODEL = "gpt-4.1";
 const AVAILABLE_MODEL_CANDIDATES = [DEFAULT_MODEL, "gpt-5.1", "gpt-4.1-mini", "gpt-4o-mini"] as const;
 const OPENAI_SECRET_NAME = "OPENAI_API_KEY";
-const PROMPT_TEMPLATE_URL = new URL("../../dataConfig/prompt-template.md", import.meta.url);
+const PROMPT_TEMPLATE_PATH = path.join(Paths.dataConfig, "prompt-template.md");
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const diagnosticsDir = path.resolve(__dirname, "../../dataDiagnostics");
+const diagnosticsDir = Paths.dataDiagnostics;
 const lastRequestPath = path.join(diagnosticsDir, "last_request.txt");
 const lastResponsePath = path.join(diagnosticsDir, "last_response.txt");
 const lastChatbotInputPath = path.join(diagnosticsDir, "last_chatbot_input.txt");
@@ -214,7 +213,7 @@ async function loadPromptTemplate(): Promise<string> {
     return cachedPromptTemplate;
   }
   if (!promptTemplatePromise) {
-    promptTemplatePromise = readFile(PROMPT_TEMPLATE_URL, "utf-8")
+    promptTemplatePromise = readFile(PROMPT_TEMPLATE_PATH, "utf-8")
       .then((contents) => {
         cachedPromptTemplate = contents;
         return contents;

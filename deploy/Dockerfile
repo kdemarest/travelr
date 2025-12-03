@@ -36,7 +36,7 @@ COPY dataConfig/ ./dataConfig/
 RUN npm run build
 
 # Create directories for runtime data and set ownership
-RUN mkdir -p /app/dataTrips /app/dataDiagnostics /app/userprefs /app/dataUsers \
+RUN mkdir -p /app/dataTrips /app/dataDiagnostics /app/dataUserPrefs /app/dataUsers \
     && chown -R travelr:travelr /app
 
 # Copy user authentication data (if exists)

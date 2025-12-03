@@ -19,7 +19,7 @@ services:
       # Persist trip data, diagnostics, and user preferences
       - ./data/dataTrips:/app/dataTrips
       - ./data/dataDiagnostics:/app/dataDiagnostics
-      - ./data/userprefs:/app/userprefs
+      - ./data/dataUserPrefs:/app/dataUserPrefs
     restart: unless-stopped
 
 # Usage:

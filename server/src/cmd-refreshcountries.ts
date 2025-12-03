@@ -1,34 +1,31 @@
-import type { ParsedCommand } from "./command.js";
-import type { CommandResponse } from "./cmd-help.js";
+// /refreshcountries command handler
 import { refreshCountryCatalog } from "./refresh-countries.js";
+import { registerCommand } from "./command-registry.js";
+import type { CommandContext, CommandHandlerResult } from "./command-context.js";
+import { CommandWithArgs } from "./command.js";
 
-export async function cmdRefreshcountries(parsed: ParsedCommand): Promise<CommandResponse> {
-  if (parsed.type !== "refreshcountries") {
-    throw new Error("cmdRefreshcountries called with non-refreshcountries command");
-  }
 
-  console.log("Handling /refreshcountries command");
+function cmdRefreshcountries()
+{
+  async function handleRefreshcountries(
+    _command: CommandWithArgs,
+    _ctx: CommandContext
+  ): Promise<CommandHandlerResult> {
+    console.log("Handling /refreshcountries command");
 
-  try {
-    const summary = await refreshCountryCatalog();
-    const message = `Updated ${summary.updated} countries, added ${summary.added}.`;
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        executedCommands: 0,
+    try {
+      const summary = await refreshCountryCatalog();
+      const message = `Updated ${summary.updated} countries, added ${summary.added}.`;
+      return { message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Country refresh failed.";
+      return {
         message,
-        summary
-      }
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Country refresh failed.";
-    return {
-      status: 502,
-      body: {
-        ok: false,
-        error: message
-      }
-    };
+        stopProcessingCommands: true
+      };
+    }
   }
+
+  return { commandId: "refreshcountries", adminOnly: true, parser: (_cmd: CommandWithArgs) => ({ commandId: "refreshcountries" as const }), handler: handleRefreshcountries };
 }
+registerCommand(cmdRefreshcountries());

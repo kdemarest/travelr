@@ -5,12 +5,36 @@
  * Each device gets a unique deviceId stored in localStorage.
  */
 
+import { clientDataCache, type ClientDataCacheData } from "./client-data-cache";
+
 const AUTH_STORAGE_KEY = "travelr_auth";
 const DEVICE_ID_KEY = "travelr_device_id";
 
 interface AuthData {
   user: string;
   authKey: string;
+}
+
+// Callback for when auth fails (401 response)
+type AuthFailureCallback = () => void;
+let onAuthFailure: AuthFailureCallback | null = null;
+
+/**
+ * Register a callback to be called when an API request returns 401.
+ * This allows the app to show the login screen when auth is invalid.
+ */
+export function setAuthFailureHandler(callback: AuthFailureCallback | null): void {
+  onAuthFailure = callback;
+}
+
+/**
+ * Trigger the auth failure handler (clears auth and notifies listeners).
+ */
+function triggerAuthFailure(): void {
+  clearAuth();
+  if (onAuthFailure) {
+    onAuthFailure();
+  }
 }
 
 // Get or create a unique device ID
@@ -81,16 +105,19 @@ export async function checkAuthRequired(): Promise<boolean> {
   try {
     const response = await fetch("/auth/status");
     const data = await response.json();
+    console.log("[checkAuthRequired] server response:", data);
     return data.authRequired === true;
-  } catch {
+  } catch (e) {
     // If we can't reach the server, assume auth is required
+    console.log("[checkAuthRequired] error:", e);
     return true;
   }
 }
 
-// Try to validate cached auth key
-export async function tryAutoLogin(): Promise<AuthData | null> {
+// Try to validate cached auth key, returns lastTripId from server if available
+export async function tryAutoLogin(): Promise<{ auth: AuthData; lastTripId: string | null } | null> {
   const stored = getStoredAuth();
+  console.log("[tryAutoLogin] stored auth:", stored);
   if (!stored) {
     return null;
   }
@@ -103,22 +130,37 @@ export async function tryAutoLogin(): Promise<AuthData | null> {
       deviceId,
       authKey: stored.authKey
     });
+    console.log("[tryAutoLogin] validating with server...");
     const response = await fetch(`/auth?${params}`);
+    console.log("[tryAutoLogin] response ok:", response.ok);
     if (response.ok) {
-      return stored;
+      const data = await response.json() as { 
+        lastTripId?: string; 
+        clientDataCache?: ClientDataCacheData;
+      };
+      console.log("[tryAutoLogin] server returned lastTripId:", data.lastTripId);
+      
+      // Update client data cache if provided
+      if (data.clientDataCache) {
+        clientDataCache.update(data.clientDataCache);
+      }
+      
+      return { auth: stored, lastTripId: data.lastTripId || null };
     }
-  } catch {
+  } catch (e) {
     // Network error, keep stored auth for retry
+    console.log("[tryAutoLogin] network error:", e);
     return null;
   }
 
   // Auth key is invalid, clear it
+  console.log("[tryAutoLogin] auth invalid, clearing");
   clearAuth();
   return null;
 }
 
 // Login with username and password
-export async function login(user: string, password: string): Promise<{ ok: boolean; error?: string }> {
+export async function login(user: string, password: string): Promise<{ ok: boolean; error?: string; lastTripId?: string }> {
   const deviceId = getDeviceId();
   const deviceInfo = getDeviceInfo();
 
@@ -129,11 +171,24 @@ export async function login(user: string, password: string): Promise<{ ok: boole
       body: JSON.stringify({ user, password, deviceId, deviceInfo })
     });
 
-    const data = await response.json();
+    const data = await response.json() as {
+      ok?: boolean;
+      user?: string;
+      authKey?: string;
+      lastTripId?: string;
+      error?: string;
+      clientDataCache?: ClientDataCacheData;
+    };
 
     if (data.ok && data.authKey) {
-      storeAuth({ user: data.user, authKey: data.authKey });
-      return { ok: true };
+      storeAuth({ user: data.user!, authKey: data.authKey });
+      
+      // Update client data cache if provided
+      if (data.clientDataCache) {
+        clientDataCache.update(data.clientDataCache);
+      }
+      
+      return { ok: true, lastTripId: data.lastTripId };
     }
 
     return { ok: false, error: data.error || "Login failed" };
@@ -174,11 +229,13 @@ export function addAuthHeaders(headers: Record<string, string> = {}): Record<str
   return headers;
 }
 
-// Wrapper for fetch that adds auth headers
+// Wrapper for fetch that adds auth headers and handles 401 responses
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers);
   const auth = getStoredAuth();
   const deviceId = getDeviceId();
+  
+  console.log("[authFetch] auth:", auth, "deviceId:", deviceId);
   
   if (auth) {
     headers.set("X-Auth-User", auth.user);
@@ -186,5 +243,13 @@ export async function authFetch(url: string, options: RequestInit = {}): Promise
     headers.set("X-Auth-Device", deviceId);
   }
   
-  return fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers });
+  
+  // If we get a 401, the auth token is invalid - trigger re-authentication
+  if (response.status === 401) {
+    console.log("[authFetch] 401 response - triggering auth failure");
+    triggerAuthFailure();
+  }
+  
+  return response;
 }

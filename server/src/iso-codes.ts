@@ -1,6 +1,6 @@
 import fs from "fs-extra";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { Paths } from "./data-paths.js";
 
 export interface IsoCodeRecord {
   countryName: string;
@@ -15,9 +15,7 @@ export interface IsoCodeResult {
   currencyAlpha3: string;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const catalogPath = path.resolve(__dirname, "../../catalog/countryData.json");
+const catalogPath = path.join(Paths.catalog, "countryData.json");
 
 let isoCodeSource: IsoCodeRecord[] = readCatalogFromDisk();
 let lookup = buildLookup(isoCodeSource);

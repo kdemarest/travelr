@@ -66,6 +66,7 @@ export class PanelDetail extends LitElement {
     }
 
     .chat-log-line {
+      display: block;
       font-size: 0.9rem;
       margin-bottom: 0.3rem;
       word-break: break-word;
@@ -76,8 +77,12 @@ export class PanelDetail extends LitElement {
     }
 
     .chat-log-line :where(p, ul, ol, pre, blockquote) {
-      margin: 0 0 0.5rem;
+      margin: 0 0 0.25rem;
       max-width: 100%;
+    }
+
+    .chat-log-line :where(p, ul, ol, pre, blockquote):last-child {
+      margin-bottom: 0;
     }
 
     .chat-log-line :where(ul, ol) {
@@ -116,7 +121,6 @@ export class PanelDetail extends LitElement {
       background: #eef2ff;
       border-radius: 6px;
       padding: 0.25rem 0.4rem;
-      display: inline-block;
     }
 
     .link-chip {

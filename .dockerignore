@@ -17,7 +17,7 @@ devenvsetup/
 # Local data (mounted as volumes in production)
 dataTrips/
 dataDiagnostics/
-userprefs/
+dataUserPrefs/
 data/
 
 # OS files

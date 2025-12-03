@@ -6,7 +6,7 @@
  */
 
 import type { TripModel } from "./types.js";
-import { refreshExchangeRatesFromOnlineSources } from "./exchange.js";
+import { applyExchangeRatesFromCatalog } from "./exchange.js";
 import { decorateModelWithDurations } from "./duration.js";
 import { computeDaySummaries } from "./day-summary.js";
 
@@ -18,12 +18,12 @@ import { computeDaySummaries } from "./day-summary.js";
  * - Using it to build an LLM prompt
  * 
  * Steps:
- * 1. Refresh exchange rates from online sources
+ * 1. Apply exchange rates from catalog (sync - catalog refreshed at startup)
  * 2. Normalize/decorate duration fields
  * 3. Compute day summaries (derived metrics per day)
  */
-export async function finalizeModel(model: TripModel): Promise<TripModel> {
-  const withRates = await refreshExchangeRatesFromOnlineSources(model);
+export function finalizeModel(model: TripModel): TripModel {
+  const withRates = applyExchangeRatesFromCatalog(model);
   const withDurations = decorateModelWithDurations(withRates);
   const daySummaries = computeDaySummaries(withDurations);
   return { ...withDurations, daySummaries };

@@ -44,7 +44,6 @@ const COMMAND_METADATA: Record<string, CommandMeta> = {
   model:       { journalable: false, chatbotExecutable: false, requiresChaining: false, injectsUid: false, administrative: false },
   
   // Administrative/maintenance commands
-  renormalize: { journalable: false, chatbotExecutable: false, requiresChaining: false, injectsUid: false, administrative: true  },
   refreshcountries: { journalable: false, chatbotExecutable: false, requiresChaining: false, injectsUid: false, administrative: true  },
   
   // Meta commands (no execution, just parsed)

@@ -4,6 +4,7 @@ import { normalizeUserTime } from "./ux-time";
 import { parseCanonicalCommand } from "./command-parse";
 import { parseChatPieces, isCommandPiece, reconstructText, type ChatPiece } from "./chat-pieces";
 import { authFetch } from "./auth";
+import { clientDataCache, type ClientDataCacheData } from "./client-data-cache";
 
 export interface CommandProcessingResult {
   ok: boolean;
@@ -20,6 +21,8 @@ interface CommandResponse {
   chatPieces?: Array<{ kind: string; piece: string }>;
   // GUID for polling chatbot response
   pendingChatbot?: string;
+  // Server-side cache data
+  clientDataCache?: ClientDataCacheData;
 }
 
 interface ChatbotPollResponse {
@@ -108,6 +111,11 @@ export async function processUserCommand(options: CommandUxOptions): Promise<Com
     const totalExecuted = payload.executedCommands ?? 0;
     if (totalExecuted > 0) {
       options.appendMessage(`✓ Executed ${totalExecuted} command(s)`);
+    }
+
+    // Update client data cache if server sent new data
+    if (payload.clientDataCache) {
+      clientDataCache.update(payload.clientDataCache);
     }
 
     // Poll for chatbot responses if a task was queued
@@ -265,7 +273,11 @@ const JOURNALABLE_COMMANDS = new Set([
   "/removeday",
   "/undo",
   "/redo",
-  "/addcountry"
+  "/addcountry",
+  "/setalarm",
+  "/deletealarm",
+  "/enablealarm",
+  "/disablealarm"
 ]);
 
 function isJournalableCommand(piece: ChatPiece): boolean {

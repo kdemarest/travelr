@@ -12,10 +12,11 @@
  * - Docker Desktop running
  * - Environment variables set: OPENAI_API_KEY, GOOGLE_CS_API_KEY, GOOGLE_CS_CX
  * 
- * Usage: node deploy.js [--dry-run]
+ * Usage: node deploy.js [--dry-run] [--skip-smoke] [--force] [--stop|--resume|--status]
  */
 
 import { execSync, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
@@ -51,10 +52,25 @@ const CONFIG = {
   ]
 };
 
-const isDryRun = process.argv.includes("--dry-run");
-const isVerbose = process.argv.includes("--verbose") || process.argv.includes("-v");
-const skipSmoke = process.argv.includes("--skip-smoke");
-const isForce = process.argv.includes("--force") || process.argv.includes("force");
+const args = process.argv.slice(2);
+const helpFlags = new Set(["?", "help", "-help", "--help"]);
+const shouldShowHelp = args.some((arg) => helpFlags.has(arg));
+const isDryRun = args.includes("--dry-run");
+const isVerbose = args.includes("--verbose") || args.includes("-v");
+const skipSmoke = args.includes("--skip-smoke");
+const isForce = args.includes("--force") || args.includes("force");
+const shouldStop = args.some((arg) => arg === "--stop" || arg === "-stop");
+const shouldResume = args.some((arg) => arg === "--resume" || arg === "-resume");
+const shouldShowStatus = args.some((arg) => arg === "--status" || arg === "-status");
+const shouldWait = args.some((arg) => arg === "--wait" || arg === "-wait");
+const isQuickDeploy = args.includes("--quick") || args.includes("-quick");
+const deployArgs = process.argv.slice(2);
+const deployCommandLabel = deployArgs.length ? `deploy ${deployArgs.join(" ")}` : "deploy";
+const isStatusMinimal = shouldShowStatus && !isVerbose;
+const isControlMinimal = (shouldStop || shouldResume) && !isVerbose;
+const isFullDeploy = !shouldShowHelp && !shouldShowStatus && !shouldStop && !shouldResume && !isQuickDeploy;
+const suppressCommandLogs = !isVerbose;
+const suppressConsoleOutput = isStatusMinimal || isControlMinimal;
 
 // Deployment mode - for future: could be "tag" for tagged releases
 const deployMode = "lazy";
@@ -105,51 +121,87 @@ function startTimer() {
   stepStartTime = Date.now();
 }
 
+function log(message, color = colors.reset, options = {}) {
+  const { forceConsole = false } = options;
+  const coloredMessage = `${color}${message}${colors.reset}`;
+  if (!suppressConsoleOutput || forceConsole) {
+    console.log(coloredMessage);
+  }
+  writeToLog(message);
+}
+
+function logStep(step, message, options) {
+  log(`\n${"=".repeat(60)}`, colors.blue, options);
+  log(`  Step ${step}: ${message}`, colors.bright + colors.blue, options);
+  log(`${"=".repeat(60)}`, colors.blue, options);
+  startTimer();
+}
+
+function logSuccess(message, options) {
+  log(`  [OK] ${message}`, colors.green, options);
+}
+
+function logWarning(message, options) {
+  log(`  [WARN] ${message}`, colors.yellow, options);
+}
+
+function logError(message, options) {
+  log(`  [FAIL] ${message}`, colors.red, options);
+}
+
+function logInfo(message, options) {
+  log(`  [INFO] ${message}`, colors.cyan, options);
+}
+
+function logCommand(cmd) {
+  log(`  $ ${cmd}`, colors.gray, { forceConsole: !suppressCommandLogs });
+}
+
+function logDryRun(message, options) {
+  log(`  [DRY RUN] ${message}`, colors.yellow, options);
+}
+
 function reportDuration(label = "Step") {
+  if (!isVerbose) return;
   const elapsed = ((Date.now() - stepStartTime) / 1000).toFixed(1);
   log(`  [TIME] ${label} completed in ${elapsed}s`, colors.gray);
 }
 
 function reportTotalDuration() {
+  if (!isVerbose) return;
   const elapsed = ((Date.now() - deployStartTime) / 1000).toFixed(1);
   log(`\n  [TIME] Total deploy time: ${elapsed}s`, colors.bright + colors.gray);
 }
 
-function log(message, color = colors.reset) {
-  const coloredMessage = `${color}${message}${colors.reset}`;
-  console.log(coloredMessage);
-  writeToLog(message);
-}
-
-function logStep(step, message) {
-  log(`\n${"=".repeat(60)}`, colors.blue);
-  log(`  Step ${step}: ${message}`, colors.bright + colors.blue);
-  log(`${"=".repeat(60)}`, colors.blue);
-  startTimer();
-}
-
-function logSuccess(message) {
-  log(`  [OK] ${message}`, colors.green);
-}
-
-function logWarning(message) {
-  log(`  [WARN] ${message}`, colors.yellow);
-}
-
-function logError(message) {
-  log(`  [FAIL] ${message}`, colors.red);
-}
-
-function logInfo(message) {
-  log(`  [INFO] ${message}`, colors.cyan);
-}
-
-function logCommand(cmd) {
-  log(`  $ ${cmd}`, colors.gray);
-}
-
-function logDryRun(message) {
-  log(`  [DRY RUN] ${message}`, colors.yellow);
+function printUsage() {
+  const lines = [
+    "Usage: node deploy.js [options]",
+    "",
+    "Options:",
+    "  --name <custom>        Override default AWS resource names (service, ECR, etc.)",
+    "  --dry-run              Show commands without executing them",
+    "  --skip-smoke           Skip local smoke tests",
+    "  --force                Delete and recreate the App Runner service before deploying",
+    "  --stop                 Pause the App Runner service (stop billing)",
+    "  --resume               Resume the App Runner service",
+    "  --status               Display the App Runner service status and exit",
+    "  --wait                 Wait for in-progress operations to complete (use with --status)",
+    "  --quick                Hot reload: zip source files and POST to running server",
+    "  --test                 Test mode: run hot reload but don't restart server (use with --quick)",
+    "  --local                Target local dev server instead of AWS (use with --quick)",
+    "  --verbose, -v          Stream full command output",
+    "  --help, -help, help, ? Show this usage information",
+    "",
+    "Examples:",
+    "  node deploy.js --dry-run --skip-smoke",
+    "  node deploy.js --stop",
+    "  node deploy.js --status --wait",
+    "  node deploy.js --quick                    (fast deploy without Docker rebuild)",
+    "  node deploy.js --quick --test --local     (test hot reload against local server)"
+  ];
+  log("");
+  lines.forEach((line) => log(`  ${line}`, colors.gray));
+  log("");
 }
 
 // ============================================================================
@@ -550,7 +602,7 @@ async function persistRunningService() {
   // First, login to get an auth key
   logInfo("Logging in as deploybot...");
   try {
-    const loginResponse = await fetch(`${baseUrl}/auth/login`, {
+    const loginResponse = await fetch(`${baseUrl}/auth`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -563,7 +615,8 @@ async function persistRunningService() {
     if (!loginResponse.ok) {
       const text = await loginResponse.text();
       logWarning(`Login failed: ${loginResponse.status} - ${text}`);
-      reportDuration("Persist (failed)");
+      logInfo("Continuing with deploy - persist skipped (password mismatch with deployed server)");
+      reportDuration("Persist (skipped)");
       return;
     }
     
@@ -742,6 +795,29 @@ function sleep(ms) {
   execSync(`node -e "setTimeout(() => {}, ${ms})"`, { stdio: "ignore" });
 }
 
+function getInProgressOperation(serviceArn) {
+  if (!serviceArn) return null;
+  try {
+    const listOpsCmd = `aws apprunner list-operations --service-arn ${serviceArn} --region ${CONFIG.awsRegion} --max-results 5 --output json`;
+    const raw = execWithOutput(listOpsCmd, { ignoreError: true, allowInDryRun: true });
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const ops = parsed.OperationSummaryList ?? [];
+    // Find the first in-progress operation
+    const inProgress = ops.find(op => op.Status === "IN_PROGRESS");
+    if (inProgress) {
+      return {
+        type: inProgress.Type ?? "UNKNOWN",
+        startedAt: inProgress.StartedAt ?? null,
+        id: inProgress.Id ?? null
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function retryOnOperationInProgress(cmd, operationType) {
   let attempt = 1;
   
@@ -755,7 +831,14 @@ function retryOnOperationInProgress(cmd, operationType) {
       // Check if it's an "operation in progress" error
       if (message.includes("OPERATION_IN_PROGRESS") || message.includes("InvalidStateException")) {
         if (attempt === 1) {
-          logWarning(`Service has an operation in progress. Waiting for it to complete...`);
+          const serviceArn = getAppRunnerServiceArn();
+          const opInfo = getInProgressOperation(serviceArn);
+          if (opInfo) {
+            const startedLabel = opInfo.startedAt ? ` (started ${opInfo.startedAt})` : "";
+            logWarning(`Service has operation in progress: ${opInfo.type}${startedLabel}`);
+          } else {
+            logWarning(`Service has an operation in progress. Waiting for it to complete...`);
+          }
           logInfo("Press Ctrl+C to cancel.");
         }
         logInfo(`Attempt ${attempt}: Waiting 10 seconds before next attempt`);
@@ -915,30 +998,440 @@ function deployToAppRunner(imageUri, instanceRoleArn) {
   return null;
 }
 
+function getAppRunnerServiceArn() {
+  const listCmd = `aws apprunner list-services --region ${CONFIG.awsRegion} --query "ServiceSummaryList[?ServiceName=='${CONFIG.appRunnerService}'].ServiceArn" --output text`;
+  const arn = execWithOutput(listCmd, { ignoreError: true, allowInDryRun: true });
+  if (!arn || arn === "None" || !arn.trim()) {
+    return null;
+  }
+  return arn.trim();
+}
+
+function controlAppRunnerService(action) {
+  const isPause = action === "pause";
+  const actionLabel = isPause ? "Stopping" : "Resuming";
+  const minimalOutput = !isVerbose;
+  if (!minimalOutput) {
+    logStep("S", `${actionLabel} AWS App Runner service`);
+  }
+  const serviceArn = getAppRunnerServiceArn();
+  if (!serviceArn) {
+    logWarning("No App Runner service found to control.", minimalOutput ? { forceConsole: true } : undefined);
+    if (!minimalOutput) {
+      reportDuration("Service control");
+    }
+    return;
+  }
+  const cliAction = isPause ? "pause-service" : "resume-service";
+  const pastTense = isPause ? "paused" : "resumed";
+  const cmd = `aws apprunner ${cliAction} --service-arn ${serviceArn} --region ${CONFIG.awsRegion}`;
+  retryOnOperationInProgress(cmd, cliAction);
+  logSuccess(`Service ${pastTense}: ${serviceArn}`, minimalOutput ? { forceConsole: true } : undefined);
+  if (!minimalOutput) {
+    reportDuration("Service control");
+  }
+}
+
+function formatElapsed(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function waitForDeployment() {
+  logStep(7, "Waiting for deployment to complete");
+  
+  const serviceArn = getAppRunnerServiceArn();
+  if (!serviceArn) {
+    logWarning("No App Runner service found.");
+    return;
+  }
+  
+  logInfo(`Service ARN: ${serviceArn}`);
+  
+  const pollInterval = 10000; // 10 seconds
+  const waitStartTime = Date.now();
+  
+  while (true) {
+    const elapsed = formatElapsed(Date.now() - waitStartTime);
+    const describeCmd = `aws apprunner describe-service --service-arn ${serviceArn} --region ${CONFIG.awsRegion} --output json`;
+    try {
+      const raw = execWithOutput(describeCmd, { allowInDryRun: true });
+      const parsed = raw ? JSON.parse(raw) : {};
+      const service = parsed.Service ?? {};
+      const status = service.Status ?? "UNKNOWN";
+      
+      if (status === "OPERATION_IN_PROGRESS") {
+        const opInfo = getInProgressOperation(serviceArn);
+        if (opInfo) {
+          logInfo(`${elapsed} Status: ${status} (${opInfo.type})`);
+        } else {
+          logInfo(`${elapsed} Status: ${status}`);
+        }
+      } else {
+        logInfo(`${elapsed} Status: ${status}`);
+      }
+      
+      if (status !== "OPERATION_IN_PROGRESS") {
+        if (status === "RUNNING") {
+          logSuccess("Deployment complete - service is running");
+        } else {
+          logWarning(`Deployment finished with status: ${status}`);
+        }
+        break;
+      }
+      
+      sleep(pollInterval);
+      
+    } catch (error) {
+      logError(`Failed to get service status: ${error.message}`);
+      break;
+    }
+  }
+  
+  reportDuration("Wait for deployment");
+}
+
+function reportAppRunnerStatus() {
+  const minimalistStatus = shouldShowStatus && !isVerbose;
+  if (!minimalistStatus) {
+    logStep("S", "Checking AWS App Runner service status");
+  }
+  const serviceArn = getAppRunnerServiceArn();
+  if (!serviceArn) {
+    const warningOptions = minimalistStatus ? { forceConsole: true } : undefined;
+    logWarning("No App Runner service found.", warningOptions);
+    if (!minimalistStatus) {
+      reportDuration("Service status");
+    }
+    return;
+  }
+  
+  const consoleOptions = minimalistStatus ? { forceConsole: true } : undefined;
+  
+  // Show ARN once at the start
+  if (minimalistStatus) {
+    logInfo(`Service ARN: ${serviceArn}`, consoleOptions);
+  }
+  
+  const pollInterval = 10000; // 10 seconds
+  let isFirstCheck = true;
+  
+  while (true) {
+    const describeCmd = `aws apprunner describe-service --service-arn ${serviceArn} --region ${CONFIG.awsRegion} --output json`;
+    try {
+      const raw = execWithOutput(describeCmd, { allowInDryRun: true });
+      const parsed = raw ? JSON.parse(raw) : {};
+      const service = parsed.Service ?? {};
+      const status = service.Status ?? "UNKNOWN";
+      
+      if (minimalistStatus) {
+        // If operation in progress, show what operation it is
+        if (status === "OPERATION_IN_PROGRESS") {
+          const opInfo = getInProgressOperation(serviceArn);
+          if (opInfo) {
+            logInfo(`Status: ${status} (${opInfo.type})`, consoleOptions);
+          } else {
+            logInfo(`Status: ${status}`, consoleOptions);
+          }
+        } else {
+          logInfo(`Status: ${status}`, consoleOptions);
+        }
+      } else {
+        if (isFirstCheck) {
+          const opStatus = service.OperationStatus ?? "UNKNOWN";
+          const url = service.ServiceUrl ? `https://${service.ServiceUrl}` : "N/A";
+          const runningStatus = service.RunningStatus ?? "UNKNOWN";
+          logInfo(`Service ARN: ${serviceArn}`);
+          logInfo(`Status: ${status}`);
+          logInfo(`Operation status: ${opStatus}`);
+          logInfo(`Running status: ${runningStatus}`);
+          logInfo(`Service URL: ${url}`);
+          if (service.UpdatedAt) {
+            logInfo(`Last updated: ${service.UpdatedAt}`);
+          }
+        } else {
+          // Subsequent checks in verbose wait mode
+          if (status === "OPERATION_IN_PROGRESS") {
+            const opInfo = getInProgressOperation(serviceArn);
+            if (opInfo) {
+              logInfo(`Status: ${status} (${opInfo.type})`);
+            } else {
+              logInfo(`Status: ${status}`);
+            }
+          } else {
+            logInfo(`Status: ${status}`);
+          }
+        }
+      }
+      
+      // If not waiting, or operation complete, exit the loop
+      if (!shouldWait || status !== "OPERATION_IN_PROGRESS") {
+        if (!minimalistStatus && isFirstCheck) {
+          logSuccess("Status check complete");
+        }
+        if (shouldWait && !isFirstCheck) {
+          logSuccess("Operation complete", consoleOptions);
+        }
+        break;
+      }
+      
+      // Wait and poll again
+      isFirstCheck = false;
+      sleep(pollInterval);
+      
+    } catch (error) {
+      logError(`Failed to get service status: ${error.message}`, consoleOptions);
+      if (isVerbose && error.stack) {
+        writeToLog(error.stack);
+      }
+      break;
+    }
+  }
+  
+  if (!minimalistStatus) {
+    reportDuration("Service status");
+  }
+}
+
+// ============================================================================
+// Quick Deploy (Hot Reload)
+// ============================================================================
+
+/**
+ * Create a zip file of source files for hot reload.
+ * Calls the shared script to ensure consistency between deploy and test.
+ */
+async function createDeploymentZip() {
+  const { createDeploymentZip: createZip } = await import("./scripts/create-deploy-zip.ts");
+  // Pass __dirname as sourceRoot - deploy.js runs from the real code directory
+  return createZip(__dirname);
+}
+
+async function quickDeploy() {
+  logStep(1, isTestMode ? "Quick Deploy - TEST MODE" : "Quick Deploy - Hot Reload");
+  
+  let baseUrl;
+  
+  if (isLocalTarget) {
+    // Target local dev server
+    baseUrl = "http://localhost:4000";
+    logInfo(`Target server: ${baseUrl} (local)`);
+  } else {
+    // Get service URL from AWS
+    const urlCmd = `aws apprunner list-services --region ${CONFIG.awsRegion} --query "ServiceSummaryList[?ServiceName=='${CONFIG.appRunnerService}'].ServiceUrl" --output text`;
+    const serviceUrl = execWithOutput(urlCmd, { ignoreError: true, allowInDryRun: true });
+    
+    if (!serviceUrl || serviceUrl === "None" || serviceUrl.trim().length === 0) {
+      throw new Error("No App Runner service found. Run a full deploy first.");
+    }
+    
+    baseUrl = `https://${serviceUrl.trim()}`;
+    logInfo(`Target server: ${baseUrl}`);
+  }
+  
+  // Get deploybot credentials
+  const deployUser = "deploybot";
+  const deployPassword = process.env.TRAVELR_DEPLOYBOT_PWD;
+  
+  if (!deployPassword) {
+    throw new Error("TRAVELR_DEPLOYBOT_PWD environment variable not set");
+  }
+  
+  // Step 1: Login to get auth key
+  logInfo("Authenticating as deploybot...");
+  
+  const loginResponse = await fetch(`${baseUrl}/auth`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: deployUser,
+      password: deployPassword,
+      deviceId: "quick-deploy"
+    })
+  });
+  
+  if (!loginResponse.ok) {
+    const text = await loginResponse.text();
+    throw new Error(`Login failed: ${loginResponse.status} - ${text}`);
+  }
+  
+  const loginData = await loginResponse.json();
+  if (!loginData.ok || !loginData.authKey) {
+    throw new Error(`Login failed: ${loginData.error || "No authKey returned"}`);
+  }
+  
+  logSuccess("Authenticated");
+  const authKey = loginData.authKey;
+  
+  // Step 2: Create deployment zip
+  logInfo("Creating deployment zip...");
+  const zipPath = await createDeploymentZip();
+  const zipStats = fs.statSync(zipPath);
+  logSuccess(`Created zip: ${(zipStats.size / 1024).toFixed(1)} KB`);
+  
+  // Step 3: Send hot-reload request
+  logInfo(isTestMode ? "Sending hot-reload TEST request..." : "Sending hot-reload request...");
+  
+  const testParam = isTestMode ? "&test=true" : "";
+  const hotReloadUrl = `${baseUrl}/admin/hot-reload?user=${deployUser}&deviceId=quick-deploy&authKey=${encodeURIComponent(authKey)}${testParam}`;
+  const zipBuffer = fs.readFileSync(zipPath);
+  
+  // Compute MD5 for integrity verification
+  const zipMd5 = crypto.createHash("md5").update(zipBuffer).digest("hex");
+  logInfo(`Zip MD5: ${zipMd5}`);
+  
+  const hotReloadResponse = await fetch(hotReloadUrl, {
+    method: "POST",
+    headers: { 
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(zipBuffer.length),
+      "X-Content-MD5": zipMd5
+    },
+    body: zipBuffer
+  });
+  
+  // Clean up zip file
+  fs.unlinkSync(zipPath);
+  
+  if (!hotReloadResponse.ok) {
+    const text = await hotReloadResponse.text();
+    throw new Error(`Hot reload failed: ${hotReloadResponse.status} - ${text}`);
+  }
+  
+  const hotReloadData = await hotReloadResponse.json();
+  if (!hotReloadData.ok) {
+    throw new Error(`Hot reload failed: ${hotReloadData.error}`);
+  }
+  
+  logSuccess(`Hot reload ${isTestMode ? "TEST " : ""}initiated (relaunch PID: ${hotReloadData.relaunchPid})`);
+  if (hotReloadData.logFile) {
+    logInfo(`Relaunch log: ${hotReloadData.logFile}`);
+  }
+  
+  // In test mode, we're done - server doesn't restart
+  if (isTestMode) {
+    logInfo("Test mode - check server logs for file list");
+    logSuccess("Quick deploy test complete");
+    return;
+  }
+  
+  // Step 4: Wait for server to come back up
+  logStep(2, "Waiting for server to restart");
+  
+  const maxWaitMs = 120000; // 2 minutes
+  const pollInterval = 10000; // 10 seconds
+  const startTime = Date.now();
+  
+  // Wait a bit for shutdown
+  logInfo("Waiting for server shutdown...");
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    const elapsed = formatElapsed(Date.now() - startTime);
+    try {
+      const pingResponse = await fetch(`${baseUrl}/ping`, { 
+        signal: AbortSignal.timeout(3000) 
+      });
+      if (pingResponse.ok) {
+        const text = await pingResponse.text();
+        if (text.trim() === "pong") {
+          logInfo(`${elapsed} Server is back up!`);
+          logSuccess("Quick deploy complete");
+          return;
+        }
+      }
+    } catch {
+      // Server not ready yet
+    }
+    logInfo(`${elapsed} Waiting for server...`);
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+  }
+  
+  throw new Error("Timeout waiting for server to restart");
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 async function main() {
-  log("\n" + "=".repeat(60), colors.bright + colors.cyan);
-  log(`  DEPLOYING ${CONFIG.appName.toUpperCase()}`, colors.bright + colors.cyan);
-  log("  " + deployModeDescription, colors.gray);
-  log("=".repeat(60), colors.bright + colors.cyan);
-  log(`\nLog of this deploy can be found in ${logFilePath}\n`, colors.gray);
-  
-  if (customName) {
-    logInfo(`Using custom name: ${customName}\n`);
+  // Always write banner to log file; only show on console for full deploy
+  const bannerLines = [
+    "\n" + "=".repeat(60),
+    `  TRAVELR ${deployCommandLabel.toUpperCase()}`,
+    "  " + (isFullDeploy ? deployModeDescription : ""),
+    "=".repeat(60),
+    `\nLog file: ${logFilePath}\n`
+  ];
+  for (const line of bannerLines) {
+    if (isFullDeploy) {
+      log(line, line.includes("TRAVELR") ? colors.bright + colors.cyan : colors.gray);
+    } else {
+      writeToLog(line);
+    }
   }
   
-  if (isForce) {
-    logWarning("FORCE MODE - Will delete and recreate App Runner service\n");
-  }
-  
-  if (isDryRun) {
-    logWarning("DRY RUN MODE - No changes will be made\n");
+  if (isFullDeploy) {
+    if (customName) {
+      logInfo(`Using custom name: ${customName}\n`);
+    }
+    
+    if (isForce) {
+      logWarning("FORCE MODE - Will delete and recreate App Runner service\n");
+    }
+    
+    if (isDryRun) {
+      logWarning("DRY RUN MODE - No changes will be made\n");
+    }
   }
   
   try {
+    if (shouldShowHelp) {
+      printUsage();
+      logStream.end();
+      return;
+    }
+
+    if ((shouldStop && shouldResume) || ((shouldStop || shouldResume) && shouldShowStatus)) {
+      throw new Error("Conflicting control flags. Use only one of --stop, --resume, or --status.");
+    }
+
+    if (shouldShowStatus) {
+      reportAppRunnerStatus();
+      log("\n" + "=".repeat(60), colors.bright + colors.green);
+      log("  SERVICE STATUS COMPLETE", colors.bright + colors.green);
+      log("=".repeat(60), colors.bright + colors.green);
+      reportTotalDuration();
+      logStream.end();
+      return;
+    }
+
+    if (shouldStop || shouldResume) {
+      const action = shouldStop ? "pause" : "resume";
+      controlAppRunnerService(action);
+      if (isVerbose) {
+        const headline = shouldStop ? "SERVICE STOP REQUEST COMPLETE" : "SERVICE RESUME REQUEST COMPLETE";
+        log("\n" + "=".repeat(60), colors.bright + colors.green);
+        log(`  ${headline}`, colors.bright + colors.green);
+        log("=".repeat(60), colors.bright + colors.green);
+        reportTotalDuration();
+      }
+      logStream.end();
+      return;
+    }
+
+    if (isQuickDeploy) {
+      await quickDeploy();
+      log("\n" + "=".repeat(60), colors.bright + colors.green);
+      log("  QUICK DEPLOY COMPLETE!", colors.bright + colors.green);
+      log("=".repeat(60), colors.bright + colors.green);
+      reportTotalDuration();
+      logStream.end();
+      return;
+    }
+
     // Step 1: Load secrets
     const secrets = loadAllSecrets();
     
@@ -969,12 +1462,14 @@ async function main() {
     // Step 6: Deploy to App Runner
     const serviceUrl = deployToAppRunner(imageUri, instanceRoleArn);
     
+    // Step 7: Wait for deployment to complete
+    waitForDeployment();
+    
     // Done!
     log("\n" + "=".repeat(60), colors.bright + colors.green);
     log("  DEPLOYMENT COMPLETE!", colors.bright + colors.green);
     log("=".repeat(60), colors.bright + colors.green);
     reportTotalDuration();
-    logInfo("Note: App Runner deployments can take 2-5 minutes to become healthy.");
     if (serviceUrl) {
       log("");
       log("Access this deployment at:", colors.bright);

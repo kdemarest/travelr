@@ -3,7 +3,7 @@ import { clearFocusedActivityUid, saveFocusedActivityUid, saveFocusedDate } from
 import { normalizeUserDate } from "./ux-date";
 
 type FocusHost = {
-  __getTripId(): string;
+  __getTripId(): string | null;
   __focusedUid: string | null;
   __focusedDate: string | null;
   __hoveredActivity: Activity | null;
@@ -15,8 +15,8 @@ type OnChangeEventFn = () => void;
 class PanelFocus {
   private host: FocusHost | null = null;
 
-  private get currentTripId(): string {
-    return this.host ? this.host.__getTripId() : "";
+  private get currentTripId(): string | null {
+    return this.host ? this.host.__getTripId() : null;
   }
 
   private cachedActivity: Activity | null = null;

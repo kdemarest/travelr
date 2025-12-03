@@ -12,15 +12,13 @@ import { planDayRegistry } from "./planDayRegistry";
 import { normalizeUserDate } from "./ux-date";
 import type { PanelDetailLogEntry } from "./components/panel-detail";
 import {
-  saveLastTripId,
-  loadLastTripId,
   saveFocusedDate,
   loadFocusedDate,
   saveFocusedActivityUid,
   loadFocusedActivityUid,
   clearFocusedActivityUid
 } from "./storage";
-import { checkAuthRequired, tryAutoLogin, login, logout, authFetch } from "./auth";
+import { checkAuthRequired, tryAutoLogin, login, logout, authFetch, setAuthFailureHandler } from "./auth";
 import "./components/panel-plan";
 import "./components/panel-day";
 import "./components/panel-activity";
@@ -35,7 +33,7 @@ export class TripApp extends LitElement {
   @state() private tripModel: TripModel | null = null;
   @state() private planTitle = "Untitled Trip";
   @state() private planLines: PlanLine[] = [];
-  @state() private currentTripId = "demo";
+  @state() private currentTripId: string | null = null;
   @state() __focusedUid: string | null = null;
   @state() __focusedDate: string | null = null;
   @state() __hoveredActivity: Activity | null = null;
@@ -53,6 +51,7 @@ export class TripApp extends LitElement {
   @state() private dayIssueNoTransportToLodging = false;
   @state() private dayIssueNoTransportToFlight = false;
   @state() private dayMismatchedUids: Set<string> = new Set();
+  @state() private activityUidsWithAlarms: Set<string> = new Set();
   @state() private dayDragPlanState: { uid: string; date: string | null } | null = null;
   @state() private markedActivityIds: string[] = [];
   @state() private markedDateKeys: string[] = [];
@@ -61,6 +60,7 @@ export class TripApp extends LitElement {
   @state() private authChecking = true;
   @state() private authUser: string | null = null;
   @state() private authError: string | null = null;
+  @state() private userMenuOpen = false;
   private attemptedAutoRestore = false;
   private pendingNewActivityPrevUids: Set<string> | null = null;
   private logEntryCounter = 0;
@@ -161,25 +161,70 @@ export class TripApp extends LitElement {
       position: absolute;
       top: 0.5rem;
       right: 1rem;
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      font-size: 0.875rem;
-      color: #64748b;
       z-index: 100;
     }
 
-    .auth-bar button {
-      padding: 0.25rem 0.75rem;
-      background: #f1f5f9;
-      border: 1px solid #cbd5e1;
-      border-radius: 4px;
+    .user-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #3b82f6;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 1rem;
       cursor: pointer;
-      font-size: 0.75rem;
+      text-transform: uppercase;
+      user-select: none;
+      border: 2px solid transparent;
+      transition: border-color 0.15s;
     }
 
-    .auth-bar button:hover {
-      background: #e2e8f0;
+    .user-avatar:hover {
+      border-color: #93c5fd;
+    }
+
+    .user-menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 0.5rem;
+      background: white;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+      min-width: 160px;
+      padding: 0.5rem 0;
+      display: none;
+    }
+
+    .user-menu.open {
+      display: block;
+    }
+
+    .user-menu-header {
+      padding: 0.5rem 1rem;
+      border-bottom: 1px solid #e2e8f0;
+      font-size: 0.875rem;
+      color: #64748b;
+    }
+
+    .user-menu-item {
+      display: block;
+      width: 100%;
+      padding: 0.5rem 1rem;
+      text-align: left;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.875rem;
+      color: #334155;
+    }
+
+    .user-menu-item:hover {
+      background: #f1f5f9;
     }
 
     .layout {
@@ -237,6 +282,7 @@ export class TripApp extends LitElement {
 
     .panel-right {
       flex: 1;
+      margin-top: var(--panel-right-offset, 18px);
     }
   `;
 
@@ -268,6 +314,10 @@ export class TripApp extends LitElement {
     
     if (result.ok) {
       this.authUser = user;
+      // Load the user's last trip from server
+      if (result.lastTripId) {
+        this.currentTripId = result.lastTripId;
+      }
     } else {
       this.authError = result.error || "Login failed";
     }
@@ -288,8 +338,13 @@ export class TripApp extends LitElement {
       <div class="layout">
         ${this.authUser ? html`
           <div class="auth-bar">
-            <span>Logged in as <strong>${this.authUser}</strong></span>
-            <button @click=${this.handleLogout}>Logout</button>
+            <div class="user-avatar" @click=${this.toggleUserMenu}>
+              ${this.authUser.charAt(0)}
+            </div>
+            <div class="user-menu ${this.userMenuOpen ? 'open' : ''}">
+              <div class="user-menu-header">Signed in as <strong>${this.authUser}</strong></div>
+              <button class="user-menu-item" @click=${this.handleLogout}>Logout</button>
+            </div>
           </div>
         ` : ""}
         <section class="panel panel-left">
@@ -322,6 +377,7 @@ export class TripApp extends LitElement {
               .issueNoTransportToLodging=${this.dayIssueNoTransportToLodging}
               .issueNoTransportToFlight=${this.dayIssueNoTransportToFlight}
               .mismatchedUids=${this.dayMismatchedUids}
+              .activityUidsWithAlarms=${this.activityUidsWithAlarms}
               @day-activity-hover=${this.handleDayActivityHover}
               @day-activity-focus=${this.handleDayActivityFocus}
               @day-activity-drag-state=${this.handleDayActivityDragState}
@@ -329,6 +385,7 @@ export class TripApp extends LitElement {
               @day-activity-move-date=${this.handleDayActivityMoveDate}
               @day-activity-toggle-mark=${this.handleDayActivityToggleMark}
               @day-activity-range-mark=${this.handleDayActivityRangeMark}
+              @panel-day-alarm-toggle=${this.handleAlarmToggle}
             ></panel-day>
           </div>
           <div class="panel panel-middle-bottom">
@@ -337,7 +394,9 @@ export class TripApp extends LitElement {
               .canCreate=${Boolean(this.tripModel)}
               .countries=${this.tripModel?.countries ?? []}
               .marked=${this.markedActivityIds.length > 0 && this.markedActivitySet.has(this.__hoveredActivity?.uid ?? "")}
+              .hasAlarm=${this.activityUidsWithAlarms.has(this.__hoveredActivity?.uid ?? "")}
               @panel-activity-create=${this.handleActivityCreate}
+              @panel-activity-alarm-toggle=${this.handleAlarmToggle}
               @panel-date-link-click=${this.handlePanelDateLink}
             ></panel-activity>
           </div>
@@ -358,7 +417,7 @@ export class TripApp extends LitElement {
     `;
   }
 
-  __getTripId(): string
+  __getTripId(): string | null
   {
 	return this.currentTripId;
   }
@@ -404,6 +463,17 @@ export class TripApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    
+    // Register auth failure handler to show login screen on 401
+    setAuthFailureHandler(() => {
+      console.log("[trip-app] Auth failure detected - showing login screen");
+      this.authUser = null;
+    });
+    
+    // Close user menu when clicking outside
+    this.handleDocumentClick = this.handleDocumentClick.bind(this);
+    document.addEventListener("click", this.handleDocumentClick);
+    
     // Check auth before doing anything else
     this.checkAuth();
   let lookupActivityByUidFn = (uid:string | null) => this.tripModel?.activities.find((activity) => activity.uid === uid) ?? null;
@@ -417,8 +487,6 @@ export class TripApp extends LitElement {
     this.applyMarkedDates(panelDateMarks.getMarked());
     this.activityMarksUnsubscribe = panelMarks.subscribe((uids) => this.applyMarkedActivities(uids));
     this.dateMarksUnsubscribe = panelDateMarks.subscribe((dates) => this.applyMarkedDates(dates));
-    this.tryAutoRestoreTrip();
-    void this.loadConversationHistory(this.currentTripId);
     void this.announceChatConnection();
   }
 
@@ -435,20 +503,52 @@ export class TripApp extends LitElement {
     }
     
     // Try auto-login with cached auth key
-    const auth = await tryAutoLogin();
-    if (auth) {
-      this.authUser = auth.user;
+    const result = await tryAutoLogin();
+    console.log("[checkAuth] tryAutoLogin result:", result);
+    if (result) {
+      this.authUser = result.auth.user;
+      // Load the user's last trip from server
+      console.log("[checkAuth] lastTripId from server:", result.lastTripId);
+      if (result.lastTripId) {
+        this.currentTripId = result.lastTripId;
+      }
     }
     
     this.authChecking = false;
+    
+    // Now that auth is complete and currentTripId may be set, restore the trip
+    this.tryAutoRestoreTrip();
+    void this.loadConversationHistory(this.currentTripId);
   }
 
   private async handleLogout() {
+    this.userMenuOpen = false;
     await logout();
     this.authUser = null;
   }
 
+  private toggleUserMenu(e: Event) {
+    e.stopPropagation();
+    this.userMenuOpen = !this.userMenuOpen;
+  }
+
+  private handleDocumentClick(e: Event) {
+    if (this.userMenuOpen) {
+      const target = e.target as HTMLElement;
+      const authBar = this.shadowRoot?.querySelector('.auth-bar');
+      if (authBar && !authBar.contains(target)) {
+        this.userMenuOpen = false;
+      }
+    }
+  }
+
   disconnectedCallback() {
+    // Clean up auth failure handler
+    setAuthFailureHandler(null);
+    
+    // Clean up document click listener
+    document.removeEventListener("click", this.handleDocumentClick);
+    
     if (this.activityMarksUnsubscribe) {
       this.activityMarksUnsubscribe();
       this.activityMarksUnsubscribe = null;
@@ -466,7 +566,7 @@ export class TripApp extends LitElement {
     if (newTripId) {
       const switchingTrip = newTripId !== this.currentTripId;
       this.currentTripId = newTripId;
-      saveLastTripId(newTripId);
+      // Server tracks lastTripId via /trip and /newtrip commands
       if (switchingTrip) {
 		panelFocus.date = null;
 		panelFocus.hoveredActivity = null;
@@ -509,6 +609,17 @@ export class TripApp extends LitElement {
   private updatePanels(model: TripModel) {
     this.planTitle = this.derivePlanTitle(model);
     this.refreshPlanLines(model.activities, model.daySummaries);
+
+    // Build set of activity UIDs that have alarms
+    const alarmActivityUids = new Set<string>();
+    if (model.alarms) {
+      for (const alarm of model.alarms) {
+        if (alarm.activityUid && alarm.enabled) {
+          alarmActivityUids.add(alarm.activityUid);
+        }
+      }
+    }
+    this.activityUidsWithAlarms = alarmActivityUids;
 
     if (!panelFocus.date) {
       panelFocus.date = loadFocusedDate(this.currentTripId);
@@ -762,6 +873,23 @@ export class TripApp extends LitElement {
     }
   }
 
+  private handleAlarmToggle(event: CustomEvent<{ activityUid: string; hasAlarm: boolean }>) {
+    const activityUid = event.detail?.activityUid?.trim();
+    if (!activityUid) {
+      return;
+    }
+    if (event.detail.hasAlarm) {
+      // Find and delete the alarm for this activity
+      const alarm = this.tripModel?.alarms?.find(a => a.activityUid === activityUid);
+      if (alarm?.uid) {
+        void this.submitCommand(`/deletealarm uid="${alarm.uid}"`, { skipChat: true });
+      }
+    } else {
+      // Create a new alarm for this activity
+      void this.submitCommand(`/setalarm activityUid="${activityUid}"`, { skipChat: true });
+    }
+  }
+
   private handleDayActivityDragState(event: CustomEvent<{ active: boolean; uid?: string; date?: string | null }>) {
     if (!event.detail?.active) {
       this.dayDragPlanState = null;
@@ -866,7 +994,7 @@ export class TripApp extends LitElement {
     
     const result = await processUserCommand({
       text,
-      currentTripId: this.currentTripId,
+      currentTripId: this.currentTripId ?? "",
       focusSummary: panelFocus.describeFocus(),
       markedActivities: this.markedActivityIds,
       markedDates: this.markedDateKeys,
@@ -934,13 +1062,14 @@ export class TripApp extends LitElement {
       return;
     }
     this.attemptedAutoRestore = true;
-    const storedTripId = loadLastTripId();
-    if (!storedTripId) {
+    // Use server's lastTripId (set by checkAuth)
+    const tripId = this.currentTripId;
+    if (!tripId) {
       return;
     }
-    this.currentTripId = storedTripId;
-	panelFocus.activityUid = loadFocusedActivityUid(storedTripId);
-    void this.submitCommand(`/trip ${storedTripId}`, { skipChat: true });
+    this.currentTripId = tripId;
+	panelFocus.activityUid = loadFocusedActivityUid(tripId);
+    void this.submitCommand(`/trip ${tripId}`, { skipChat: true });
   }
 
   private handlePanelDetailSelect(event: CustomEvent<{ type: "activity" | "date"; value: string }>) {

@@ -2,33 +2,63 @@ import cors from "cors";
 import express, { Request, Response, NextFunction } from "express";
 import morgan from "morgan";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import fs from "fs-extra";
-import { JournalService } from "./journal.js";
-import { TripDocService } from "./tripdoc.js";
-import { ConversationStore } from "./conversation.js";
+
+// Import all command handlers to trigger registration
+import "./cmd-add.js";
+import "./cmd-addcountry.js";
+import "./cmd-delete.js";
+import "./cmd-deletealarm.js";
+import "./cmd-disablealarm.js";
+import "./cmd-edit.js";
+import "./cmd-enablealarm.js";
+import "./cmd-help.js";
+import "./cmd-insertday.js";
+import "./cmd-intent.js";
+import "./cmd-mark.js";
+import "./cmd-model.js";
+import "./cmd-moveday.js";
+import "./cmd-newtrip.js";
+import "./cmd-redo.js";
+import "./cmd-refreshcountries.js";
+import "./cmd-removeday.js";
+import "./cmd-setalarm.js";
+import "./cmd-trip.js";
+import "./cmd-undo.js";
+import "./cmd-userpref.js";
+import "./cmd-websearch.js";
+import "./cmd-whoami.js";
+
+import { TripCache, initTripCache } from "./trip-cache.js";
 import {
   DEFAULT_MODEL,
   checkOpenAIConnection
 } from "./gpt.js";
-import { refreshExchangeRateCatalogOnStartup } from "./exchange.js";
+import { loadExchangeRateCatalog, refreshExchangeRateCatalogOnStartup, flushExchangeRateCatalog } from "./exchange.js";
 import { createChatHandler } from "./api-chat.js";
 import { createCommandRouteHandler } from "./api-command.js";
+import { createAlarmsRouter } from "./api-alarms.js";
 import { gptQueue } from "./gpt-queue.js";
 import { checkSecretsOnStartup } from "./secrets.js";
-import { login, validateAuthKey, logout, isAuthEnabled, getDevices } from "./auth.js";
+import { login, authenticateAndFetchUser, logout, isAuthConfigured, initAuth, flushAuth, getLastTripId } from "./auth.js";
+import { flushUserPreferences } from "./user-preferences.js";
+import { populateBootstrapData } from "./cache-population.js";
+import type { User } from "./user.js";
+import { createMcpRouter } from "./api-mcp.js";
+
+// Extend Express Request to include authenticated user
+export interface AuthenticatedRequest extends Request {
+  user: User;
+}
 import { loadConfig, getServerPort, shouldExpressServeStatic } from "./config.js";
 import adminRouter, { isMaintenanceMode, getMaintenanceMessage } from "./api-admin.js";
 import { initS3Sync, downloadFromS3, startPeriodicSync, shutdownSync } from "./s3-sync.js";
+import { writePidFile, removePidFile } from "./pid-file.js";
+import { Paths } from "./data-paths.js";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const dataTripsDir = path.resolve(__dirname, "../../dataTrips");
-const dataConfigDir = path.resolve(__dirname, "../../dataConfig");
-const clientDistDir = path.resolve(__dirname, "../../client/dist");
-const journalService = new JournalService(dataTripsDir);
-const tripDocService = new TripDocService(dataTripsDir);
-const conversationStore = new ConversationStore(dataTripsDir);
+const dataTripsDir = Paths.dataTrips;
+const clientDistDir = Paths.clientDist;
+const tripCache = initTripCache(dataTripsDir);
 
 async function ensureDataDir() {
   await fs.ensureDir(dataTripsDir);
@@ -47,7 +77,22 @@ async function bootstrap() {
     await downloadFromS3();
   }
   
+  // Initialize auth module (load user data files)
+  initAuth();
+  
+  // SECURITY: Verify auth configuration before starting
+  // Auth is ALWAYS required - if no users exist, refuse to start
+  if (!isAuthConfigured()) {
+    console.error("=".repeat(60));
+    console.error("FATAL: No users are configured in dataUsers/users.json!");
+    console.error("Authentication is always required. Add at least one user.");
+    console.error("Refusing to start in an insecure state.");
+    console.error("=".repeat(60));
+    process.exit(1);
+  }
+  
   await checkSecretsOnStartup();
+  loadExchangeRateCatalog();
   await refreshExchangeRateCatalogOnStartup();
 
   const app = express();
@@ -60,23 +105,29 @@ async function bootstrap() {
   });
 
   // =========================================================================
-  // Authentication routes (unprotected)
+  // Authentication routes (unprotected - needed to log in)
   // =========================================================================
   
   // Check if auth is required
   app.get("/auth/status", (_req, res) => {
-    res.json({ authRequired: isAuthEnabled() });
+    res.json({ authRequired: true });
   });
 
   // Validate cached auth key
-  app.get("/auth", (req, res) => {
-    const user = req.query.user as string;
+  app.get("/auth", async (req, res) => {
+    const userIdParam = req.query.user as string;
     const deviceId = req.query.deviceId as string;
     const authKey = req.query.authKey as string;
     
-    const validUser = validateAuthKey(user, deviceId, authKey);
-    if (validUser) {
-      res.json({ ok: true, user: validUser });
+    const { valid, user } = authenticateAndFetchUser(userIdParam, deviceId, authKey);
+    if (valid && user) {
+      const lastTripId = getLastTripId(user.userId);
+      
+      // Populate bootstrap data for client
+      await populateBootstrapData(user);
+      const clientDataCache = user.clientDataCache.getData();
+      
+      res.json({ ok: true, userId: user.userId, lastTripId, clientDataCache });
     } else {
       res.status(401).json({ ok: false, error: "Invalid or expired auth key" });
     }
@@ -84,9 +135,9 @@ async function bootstrap() {
 
   // Login with username/password
   app.post("/auth", async (req, res) => {
-    const { user, password, deviceId, deviceInfo } = req.body;
+    const { user: userId, password, deviceId, deviceInfo } = req.body;
     
-    if (!user || !password) {
+    if (!userId || !password) {
       return res.status(400).json({ ok: false, error: "Missing user or password" });
     }
     
@@ -99,9 +150,19 @@ async function bootstrap() {
       || req.socket.remoteAddress 
       || "";
     
-    const authKey = await login(user, password, deviceId, deviceInfo || "", ip);
+    const authKey = await login(userId, password, deviceId, deviceInfo || "", ip);
     if (authKey) {
-      res.json({ ok: true, user, authKey });
+      // Get the User object to populate bootstrap data
+      const { user } = authenticateAndFetchUser(userId, deviceId, authKey);
+      const lastTripId = getLastTripId(userId);
+      
+      if (user) {
+        await populateBootstrapData(user);
+        const clientDataCache = user.clientDataCache.getData();
+        res.json({ ok: true, user: userId, authKey, lastTripId, clientDataCache });
+      } else {
+        res.json({ ok: true, user: userId, authKey, lastTripId });
+      }
     } else {
       res.status(401).json({ ok: false, error: "Invalid username or password" });
     }
@@ -109,55 +170,51 @@ async function bootstrap() {
 
   // Logout
   app.post("/auth/logout", (req, res) => {
-    const user = req.query.user as string || req.body.user;
+    const userId = req.query.userId as string || req.body.userId;
     const deviceId = req.query.deviceId as string || req.body.deviceId;
-    if (user && deviceId) {
-      logout(user, deviceId);
+    if (userId && deviceId) {
+      logout(userId, deviceId);
     }
     res.json({ ok: true });
   });
 
-  // List devices for a user (requires valid auth)
-  app.get("/auth/devices", (req, res) => {
-    const user = req.query.user as string;
-    const deviceId = req.query.deviceId as string;
-    const authKey = req.query.authKey as string;
-    
-    const validUser = validateAuthKey(user, deviceId, authKey);
-    if (!validUser) {
-      return res.status(401).json({ ok: false, error: "Authentication required" });
-    }
-    
-    const devices = getDevices(validUser);
-    res.json({ ok: true, devices });
-  });
+  // =========================================================================
+  // MCP endpoint for ChatGPT connectors (no auth for now)
+  // =========================================================================
+  app.use("/mcp", createMcpRouter());
 
   // =========================================================================
-  // Admin routes (protected by isAdmin check)
+  // Static file serving - BEFORE auth so the login page can load
+  // The client app handles showing the login screen when API calls return 401
   // =========================================================================
-  app.use("/admin", adminRouter);
+  if (shouldExpressServeStatic()) {
+    console.log(`Serving static files from ${clientDistDir}`);
+    app.use(express.static(clientDistDir));
+  }
 
   // =========================================================================
-  // Auth middleware - protects all /api/* routes
+  // Auth middleware - protects EVERYTHING below this point
   // =========================================================================
   
   const requireAuth = (req: Request, res: Response, next: NextFunction) => {
-    // Skip auth if no users configured
-    if (!isAuthEnabled()) {
-      return next();
-    }
-    
     // Check for auth in headers or query params
     const authKey = req.headers["x-auth-key"] as string || req.query.authKey as string;
-    const user = req.headers["x-auth-user"] as string || req.query.user as string;
+    const userHeader = req.headers["x-auth-user"] as string || req.query.user as string;
     const deviceId = req.headers["x-auth-device"] as string || req.query.deviceId as string;
     
-    if (validateAuthKey(user, deviceId, authKey)) {
+    const { valid, user } = authenticateAndFetchUser(userHeader, deviceId, authKey);
+    if (valid && user) {
+      // Attach user to request for downstream handlers
+      (req as AuthenticatedRequest).user = user;
       return next();
     }
     
+    // Not authenticated - return 401
     res.status(401).json({ ok: false, error: "Authentication required" });
   };
+
+  // Apply auth middleware globally (everything after this requires auth)
+  app.use(requireAuth);
 
   // Maintenance mode check - block data-modifying requests during deploy
   const checkMaintenance = (req: Request, res: Response, next: NextFunction) => {
@@ -172,11 +229,17 @@ async function bootstrap() {
     next();
   };
 
-  // Apply auth middleware to all API routes
-  app.use("/api", requireAuth);
-  app.use("/api", checkMaintenance);
+  app.use(checkMaintenance);
 
-  app.post("/api/trip/:tripName/command", createCommandRouteHandler(tripDocService, journalService, conversationStore, dataTripsDir));
+  // =========================================================================
+  // Admin routes (protected by isAdmin check)
+  // =========================================================================
+  app.use("/admin", adminRouter);
+
+  // Mount alarms router (for mobile app polling)
+  app.use("/api", createAlarmsRouter(tripCache));
+
+  app.post("/api/trip/:tripName/command", createCommandRouteHandler(tripCache));
 
   app.get("/api/gpt/health", async (_req, res) => {
     try {
@@ -191,7 +254,8 @@ async function bootstrap() {
   app.get("/api/trip/:tripName/conversation", async (req, res) => {
     const tripName = req.params.tripName;
     try {
-      const history = await conversationStore.read(tripName);
+      const trip = await tripCache.getTrip(tripName);
+      const history = trip.conversation.read();
       res.json({ ok: true, history });
     } catch (error) {
       console.error("Failed to read conversation history", { tripName, error });
@@ -199,7 +263,7 @@ async function bootstrap() {
     }
   });
 
-  app.post("/api/trip/:tripName/chat", createChatHandler(tripDocService, conversationStore));
+  app.post("/api/trip/:tripName/chat", createChatHandler(tripCache));
 
   // Poll for chained GPT response by GUID
   app.get("/api/chain/:guid", async (req, res) => {
@@ -232,12 +296,8 @@ async function bootstrap() {
     }
   });
 
-  // Serve static files in production (when Vite isn't running)
+  // SPA fallback - serve index.html for any unmatched routes (in production)
   if (shouldExpressServeStatic()) {
-    console.log(`Serving static files from ${clientDistDir}`);
-    app.use(express.static(clientDistDir));
-    
-    // SPA fallback - serve index.html for any unmatched routes
     app.get("/{*splat}", (_req, res) => {
       res.sendFile(path.join(clientDistDir, "index.html"));
     });
@@ -246,6 +306,9 @@ async function bootstrap() {
   const port = getServerPort();
   const server = app.listen(port, () => {
     console.log(`Travelr API listening on http://localhost:${port}`);
+    
+    // Write PID file for hot-reload detection
+    writePidFile();
     
     // Start periodic S3 sync (every 10 minutes)
     if (process.env.TRAVELR_S3_BUCKET) {
@@ -256,6 +319,15 @@ async function bootstrap() {
   // Graceful shutdown handler
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}, shutting down gracefully...`);
+    
+    // Remove PID file first (signals to relaunch script we're shutting down)
+    removePidFile();
+    
+    // Flush pending writes
+    flushAuth();
+    flushUserPreferences();
+    flushExchangeRateCatalog();
+    await tripCache.flushAllTrips();
     
     // Final S3 sync
     await shutdownSync();

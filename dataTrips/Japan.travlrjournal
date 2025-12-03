@@ -823,8 +823,8 @@
 /removeday date="2025-01-31"
 /add activityType=rentalCar date="2025-03-04" time="" name="Rental Car Pickup" description="Pick up a small rental car for solo travel. Preference: compact vehicle, traveling alone." status="idea" currencyAndPrice="JPY " notes="Small car preferred, solo traveler. Adjust pickup/dropoff details as needed." uid="G9gZRLiB5D_" lineNum=824
 /edit uid=G9gZRLiB5D_ duration="6 days" lineNum=825
-/edit G75P2W77abI removeday="date=\"2025-03-05\"" lineNum=826
-/edit G75P2W77abI removeday="date=\"2025-03-06\"" lineNum=827
+/removeday date="2025-03-05"
+/removeday date="2025-03-06"
 /removeday date="2025-02-21"
 /insertday after="2025-02-25"
 /edit uid="G9gZRLiB5D_" time="10:00" lineNum="830"
@@ -846,15 +846,67 @@
 /edit uid=G8gLSHqJLb_ status="booked" bookingDate="2025-02-01" name="Taco Dinner at Nigiri Taco" notes="Booked at Nigiri Taco" lineNum=846
 /moveday from="2025-02-01" to="2025-02-02"
 /edit uid=G9hbTbitjH_ name="Flight: Austin to Tokyo via DFW" description="Austin (AUS) to Dallas/Fort Worth (DFW), 2-hour layover, then DFW to Tokyo Narita (NRT). Typical 1-stop routing." airport="AUS" arriveAirport="NRT" duration="16 hours" time="07:00" arriveDate="2025-01-29" arriveTime="15:00" stops=1 status="idea" notes="Segment 1: AUS-DFW (3h), 2h layover; Segment 2: DFW-NRT (11h)." lineNum=848
-/edit G897t0kGYjA moveday="from=\"2025-01-28\" to=\"2025-01-29\"" lineNum=849
+/edit uid="G897t0kGYjA" moveday="from=\"2025-01-28\" to=\"2025-01-29\"" lineNum=849
 /undo count=1
 /edit uid=G897t0kGYjA date="2025-01-29" lineNum=851
 /delete uid=G9hbTbitjH_ lineNum=852
 /add activityType=flight date="2025-01-28" time="07:00" name="Flight: Austin to Dallas/Fort Worth" description="Austin (AUS) to Dallas/Fort Worth (DFW). First segment of Japan trip." airport="AUS" arriveAirport="DFW" duration="3 hours" currencyAndPrice="USD 200" status="idea" arriveDate="2025-01-28" arriveTime="10:00" stops=0 uid="G9i20cT3v3_" lineNum=853
 /add activityType=flight date="2025-01-28" time="12:00" name="Flight: Dallas/Fort Worth to Tokyo Narita" description="Dallas/Fort Worth (DFW) to Tokyo Narita (NRT) after 2-hour layover. Main transpacific segment." airport="DFW" arriveAirport="NRT" duration="13 hours" currencyAndPrice="USD 700" status="idea" arriveDate="2025-01-29" arriveTime="15:00" stops=0 uid="G9i20dJg$b_" lineNum=854
 /add activityType=awaken date="2025-01-28" time="04:00" name="Wake Up for AUS→DFW Flight" description="Wake up at 4:00 AM to prepare for 7:00 AM international flight from Austin. Allows time to get ready and reach the airport by 5:00 AM." status="idea" uid="G9i$liwVsL_" lineNum=855
-/edit G75JOf7mRzG removeday="date=\"2025-02-04\"" lineNum=856
-/edit G75JOf7mRzG removeday="date=\"2025-02-12\"" lineNum=857
-/edit G75JOf7mRzG removeday="date=\"2025-02-26\"" lineNum=858
-/edit G75JOf7mRzG removeday="date=\"2025-03-13\"" lineNum=859
+/edit uid="G75JOf7mRzG" removeday="date=\"2025-02-04\"" lineNum=856
+/edit uid="G75JOf7mRzG" removeday="date=\"2025-02-12\"" lineNum=857
+/edit uid="G75JOf7mRzG" removeday="date=\"2025-02-26\"" lineNum=858
+/edit uid="G75JOf7mRzG" removeday="date=\"2025-03-13\"" lineNum=859
 /moveday from="2025-01-31" to="2025-02-01"
+/edit uid="G75MVDvB_3D" time="08:00" lineNum="861"
+/edit uid="G75MVDvB_3D" setalarm="activityUid=\"G75MVDvB_3D\"" lineNum="862"
+/edit uid="G75MVDvB_3D" setalarm="activityUid=\"G75MVDvB_3D\"" lineNum="863"
+/edit uid="G75MVDvB_3D" setalarm="activityUid=\"G75MVDvB_3D\"" lineNum="864"
+/setalarm uid="G94obZkEET_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94obZkEET_"
+/setalarm uid="G94ovWx35b_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94ovWx35b_"
+/setalarm uid="G94p8h9JYD_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94p8h9JYD_"
+/setalarm uid="G94p$n$QU__" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94p$n$QU__"
+/setalarm uid="G94vnRIFlf_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94vnRIFlf_"
+/setalarm uid="G94vpQ52DP_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94vpQ52DP_"
+/setalarm uid="G94wMg8ItP_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94wMg8ItP_"
+/setalarm uid="G94wOYVc5X_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94wOYVc5X_"
+/setalarm uid="G94wRQ1IbL_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94wRQ1IbL_"
+/setalarm uid="G94wTVc1UL_" activityUid="G75MVDvB_3D"
+/deletealarm uid="G94wTVc1UL_"
+/setalarm uid="G94w3AH0UD_" activityUid="G8gMQDvWnr_"
+/deletealarm uid="G94w3AH0UD_"
+/setalarm uid="G94w98XO6L_" activityUid="G8gMQDvWnr_"
+/deletealarm uid="G94w98XO6L_"
+/setalarm uid="G94zNCJql3_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94zNCJql3_"
+/setalarm uid="G94zXDRgMH_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94zXDRgMH_"
+/setalarm uid="G94zallbo__" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94zallbo__"
+/setalarm uid="G94z3fSN3T_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94z3fSN3T_"
+/setalarm uid="G94z6XUGCz_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94z6XUGCz_"
+/setalarm uid="G94z8vrahD_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G94z8vrahD_"
+/setalarm uid="G940JSMvJn_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G940JSMvJn_"
+/setalarm uid="G940Nlf3qX_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G940Nlf3qX_"
+/setalarm uid="G940Vpow4v_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G940Vpow4v_"
+/setalarm uid="G942wFNGJf_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G942wFNGJf_"
+/setalarm uid="G9421eQnfD_" activityUid="G75Mw5QvZb_"
+/deletealarm uid="G9421eQnfD_"
+/whoami
+/trip

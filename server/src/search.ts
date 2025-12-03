@@ -1,17 +1,16 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { URL, fileURLToPath } from "node:url";
+import { URL } from "node:url";
 import { getSecretOptional } from "./secrets.js";
 import { shouldWriteDiagnostics } from "./config.js";
+import { Paths } from "./data-paths.js";
 
 const CUSTOM_SEARCH_ENDPOINT = new URL("https://www.googleapis.com/customsearch/v1");
 const MAX_RESULTS = 8;
 const GOOGLE_API_KEY_SECRET = "GOOGLE_CS_API_KEY";
 const GOOGLE_CX_SECRET = "GOOGLE_CS_CX";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const diagnosticsDir = path.resolve(__dirname, "../../dataDiagnostics");
+const diagnosticsDir = Paths.dataDiagnostics;
 const lastSearchHtmlPath = path.join(diagnosticsDir, "last_search_result.html");
 
 type CustomSearchItem = {

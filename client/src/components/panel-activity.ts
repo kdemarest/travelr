@@ -4,6 +4,7 @@ import type { Activity, CountryInfo } from "../types";
 import { describeActivity } from "../view/view-plan";
 import { dateLinkStyles, renderTextWithDateLinks } from "../date-link";
 import { formatMonthDayLabel } from "../datetime";
+import { alarmIcon } from "./indicators";
 
 @customElement("panel-activity")
 export class PanelActivity extends LitElement {
@@ -11,6 +12,7 @@ export class PanelActivity extends LitElement {
   @property({ type: Boolean }) canCreate = false;
   @property({ attribute: false }) countries: CountryInfo[] = [];
   @property({ type: Boolean }) marked = false;
+  @property({ type: Boolean }) hasAlarm = false;
 
   static styles = [css`
     :host {
@@ -56,6 +58,33 @@ export class PanelActivity extends LitElement {
       color: #b91c1c;
       font-weight: 600;
       font-size: 0.9rem;
+    }
+
+    .alarm-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+
+    .alarm-indicator:hover {
+      background: rgba(0, 0, 0, 0.05);
+    }
+
+    .alarm-indicator svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    .alarm-indicator.alarm-on {
+      color: #0f172a;
+    }
+
+    .alarm-indicator.alarm-off {
+      color: #94a3b8;
     }
 
     .create-button {
@@ -205,6 +234,11 @@ export class PanelActivity extends LitElement {
       <div class="card">
         <div class="header">
           <h3 class=${this.marked ? "title marked" : "title"}>${title}</h3>
+          <span 
+            class="alarm-indicator ${this.hasAlarm ? "alarm-on" : "alarm-off"}" 
+            title=${this.hasAlarm ? "Alarm set - click to remove" : "Click to set alarm"}
+            @click=${this.handleAlarmToggle}
+          >${alarmIcon()}</span>
           <button
             class="create-button"
             aria-label="Add activity"
@@ -260,6 +294,21 @@ export class PanelActivity extends LitElement {
       new CustomEvent("panel-activity-create", {
         bubbles: true,
         composed: true
+      })
+    );
+  }
+
+  private handleAlarmToggle(event: Event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!this.activity?.uid) {
+      return;
+    }
+    this.dispatchEvent(
+      new CustomEvent("panel-activity-alarm-toggle", {
+        bubbles: true,
+        composed: true,
+        detail: { activityUid: this.activity.uid, hasAlarm: this.hasAlarm }
       })
     );
   }
@@ -613,8 +662,7 @@ function shouldShowReservationWarning(activity: Activity): boolean {
   if (status !== "idea" && status !== "planned") {
     return false;
   }
-  const record = activity as Activity & Record<string, unknown>;
-  const rawNeeded = record.reservationNeeded;
+  const rawNeeded: unknown = activity.reservationNeeded;
   if (typeof rawNeeded === "boolean") {
     return rawNeeded;
   }

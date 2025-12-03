@@ -59,6 +59,8 @@ Set these environment variables (User environment variables recommended):
 | `OPENAI_API_KEY` | ChatGPT API key |
 | `GOOGLE_CS_API_KEY` | Google Custom Search API key |
 | `GOOGLE_CS_CX` | Google Programmable Search Engine ID |
+| `TRAVELR_DEPLOYBOT_PWD` | Deploybot password for deploy script admin operations |
+| `TRAVELR_TESTBOT_PWD` | Test user password for running auth unit tests |
 
 To set using setup.js:
 ```bash
@@ -66,6 +68,8 @@ node setup.js dev (or prod)
 node setup.js OPENAI_API_KEY sk-proj-xxx
 node setup.js GOOGLE_CS_API_KEY AIzaSyxxx
 node setup.js GOOGLE_CS_CX your-search-engine-id
+node setup.js TRAVELR_DEPLOYBOT_PWD your-deploybot-password
+node setup.js TRAVELR_TESTBOT_PWD your-test-password
 ```
 
 Restart your terminal after setting variables.

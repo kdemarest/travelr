@@ -59,10 +59,44 @@ export interface DaySummary {
   issueNoTransportToFlight: boolean;
 }
 
+export interface Alarm {
+  uid: string;
+  tripId: string;
+  
+  // Either relative to activity OR absolute time
+  activityUid?: string;      // if set, alarm time is computed from activity
+  minutesBefore?: number;    // minutes before activity start (default: 30)
+  
+  // Absolute time (used when no activityUid, or as computed cache)
+  date?: string;             // "2025-12-15"
+  time?: string;             // "09:00"
+  
+  // Display
+  label: string;
+  location?: string;         // geofence address or "lat,lng"
+  
+  // State
+  enabled: boolean;
+  dismissed?: boolean;       // user stopped this specific alarm instance
+}
+
 export interface TripModel {
   tripName: string;
   tripId?: string;
   activities: Activity[];
   countries?: CountryInfo[];
   daySummaries?: DaySummary[];
+  alarms?: Alarm[];
+}
+
+/**
+ * Create an empty TripModel with the given trip name.
+ */
+export function createEmptyTripModel(tripName: string): TripModel {
+  return {
+    tripName,
+    tripId: tripName,
+    activities: [],
+    countries: []
+  };
 }

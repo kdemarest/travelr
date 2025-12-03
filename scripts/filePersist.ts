@@ -125,7 +125,7 @@ async function login(url: string, user: string, password: string): Promise<strin
     body: JSON.stringify({ user, password, deviceId }),
   });
   
-  const data: ApiResponse = await response.json();
+  const data = await response.json() as ApiResponse;
   
   if (!data.ok || !data.authKey) {
     throw new Error(`Login failed: ${data.error || "Unknown error"}`);
@@ -166,7 +166,7 @@ async function downloadFiles(args: Args): Promise<void> {
   console.log("Downloading files from server...");
   
   const response = await fetch(filesUrl);
-  const data: ApiResponse = await response.json();
+  const data = await response.json() as ApiResponse;
   
   if (!data.ok || !data.data) {
     throw new Error(`Download failed: ${data.error || "Unknown error"}`);
@@ -286,7 +286,7 @@ async function uploadFiles(args: Args): Promise<void> {
     body: JSON.stringify(payload),
   });
   
-  const data: ApiResponse = await response.json();
+  const data = await response.json() as ApiResponse;
   
   if (!data.ok) {
     throw new Error(`Upload failed: ${data.error || "Unknown error"}`);

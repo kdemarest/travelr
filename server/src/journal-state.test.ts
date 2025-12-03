@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { applyTripCommand } from "./reducer.js";
-import type { TripModel } from "./types.js";
-import type { JournalEntry } from "./tripdoc.js";
-import { resolveActiveJournalEntries } from "./tripdoc.js";
-import { ensureDefaultCountry } from "./country-defaults.js";
+import { tripModelCompiler } from "./trip-model-compiler.js";
+import { type TripModel, createEmptyTripModel } from "./types.js";
+import type { JournalEntry } from "./journal-state.js";
+import { JournalState } from "./journal-state.js";
+import { CommandWithArgs } from "./command.js";
 
-describe("resolveActiveJournalEntries", () => {
+// Import command handlers to register them
+import "./cmd-add.js";
+import "./cmd-addcountry.js";
+import "./cmd-undo.js";
+import "./cmd-redo.js";
+
+describe("JournalState.getActiveEntries", () => {
   it("handles undo bursts with intervening commands", () => {
     const entries: JournalEntry[] = [
       addEntry(1, "cmd1"),
@@ -19,8 +25,8 @@ describe("resolveActiveJournalEntries", () => {
       addEntry(9, "cmd6")
     ];
 
-    const active = resolveActiveJournalEntries(entries);
-    const model = replay(active);
+    const state = new JournalState(entries);
+    const model = replay(state.getActiveEntries());
 
     expect(model.activities.map((activity) => activity.uid)).toEqual(["cmd1", "cmd2", "cmd6"]);
   });
@@ -34,8 +40,8 @@ describe("resolveActiveJournalEntries", () => {
       redoEntry(5)
     ];
 
-    const active = resolveActiveJournalEntries(entries);
-    const model = replay(active);
+    const state = new JournalState(entries);
+    const model = replay(state.getActiveEntries());
 
     expect(model.activities.map((activity) => activity.uid)).toEqual(["cmd1", "cmd2"]);
   });
@@ -49,8 +55,8 @@ describe("resolveActiveJournalEntries", () => {
       redoEntry(5)
     ];
 
-    const active = resolveActiveJournalEntries(entries);
-    const model = replay(active);
+    const state = new JournalState(entries);
+    const model = replay(state.getActiveEntries());
 
     expect(model.activities.map((activity) => activity.uid)).toEqual(["cmd1", "cmd3"]);
   });
@@ -59,52 +65,35 @@ describe("resolveActiveJournalEntries", () => {
 function addEntry(lineNumber: number, uid: string): JournalEntry {
   return {
     lineNumber,
-    command: {
-      type: "add",
-      activityType: "visit",
-      fields: { name: uid },
-      uid
-    }
+    command: new CommandWithArgs(`/add activityType="visit" name="${uid}" uid="${uid}"`)
   };
 }
 
 function undoEntry(lineNumber: number, count = 1): JournalEntry {
   return {
     lineNumber,
-    command: {
-      type: "undo",
-      count
-    }
+    command: new CommandWithArgs(`/undo count=${count}`)
   };
 }
 
 function redoEntry(lineNumber: number, count = 1): JournalEntry {
   return {
     lineNumber,
-    command: {
-      type: "redo",
-      count
-    }
+    command: new CommandWithArgs(`/redo count=${count}`)
   };
 }
 
 function replay(entries: JournalEntry[]): TripModel {
   return entries.reduce<TripModel>(
-    (model, entry) => applyTripCommand(model, entry.command),
-    ensureDefaultCountry({ tripName: "test", tripId: "test", activities: [], countries: [] })
+    (model, entry) => tripModelCompiler.TESTONLY_applyCommand(model, entry.command),
+    createEmptyTripModel("test")
   );
 }
 
-describe("applyTripCommand addcountry", () => {
+describe("applyCommand addcountry", () => {
   it("adds a country entry with provided ISO codes", () => {
-    const model: TripModel = ensureDefaultCountry({ tripName: "test", tripId: "test", activities: [], countries: [] });
-    const result = applyTripCommand(model, {
-      type: "addcountry",
-      countryName: "Japan",
-      countryAlpha2: "JP",
-      currencyAlpha3: "JPY",
-      id: "countryJapan"
-    });
+    const model = createEmptyTripModel("test");
+    const result = tripModelCompiler.TESTONLY_applyCommand(model, new CommandWithArgs('/addcountry countryName="Japan" countryAlpha2="JP" currencyAlpha3="JPY" id="countryJapan"'));
 
     const japan = result.countries?.find((entry) => entry.countryAlpha2 === "JP");
     expect(japan).toBeTruthy();
@@ -118,11 +107,8 @@ describe("applyTripCommand addcountry", () => {
   });
 
   it("derives ISO codes when they are omitted", () => {
-    const model: TripModel = ensureDefaultCountry({ tripName: "test", tripId: "test", activities: [], countries: [] });
-    const result = applyTripCommand(model, {
-      type: "addcountry",
-      countryName: "Japan"
-    });
+    const model = createEmptyTripModel("test");
+    const result = tripModelCompiler.TESTONLY_applyCommand(model, new CommandWithArgs('/addcountry countryName="Japan"'));
 
     const japan = result.countries?.find((entry) => entry.countryAlpha2 === "JP");
     expect(japan).toBeTruthy();
@@ -134,10 +120,8 @@ describe("applyTripCommand addcountry", () => {
   });
 
   it("updates an existing entry instead of duplicating", () => {
-    const baseModel: TripModel = ensureDefaultCountry({
-      tripName: "test",
-      tripId: "test",
-      activities: [],
+    const baseModel: TripModel = {
+      ...createEmptyTripModel("test"),
       countries: [
         {
           country: "Japan",
@@ -147,15 +131,9 @@ describe("applyTripCommand addcountry", () => {
           id: "countryJapan"
         }
       ]
-    });
+    };
 
-    const result = applyTripCommand(baseModel, {
-      type: "addcountry",
-      countryName: "Japan",
-      countryAlpha2: "JP",
-      currencyAlpha3: "JPY",
-      id: "countryJapan"
-    });
+    const result = tripModelCompiler.TESTONLY_applyCommand(baseModel, new CommandWithArgs('/addcountry countryName="Japan" countryAlpha2="JP" currencyAlpha3="JPY" id="countryJapan"'));
 
     const japanEntries = result.countries?.filter((entry) => entry.countryAlpha2 === "JP");
     expect(japanEntries).toHaveLength(1);

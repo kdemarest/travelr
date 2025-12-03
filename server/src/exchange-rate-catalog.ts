@@ -1,6 +1,6 @@
-import fs from "fs-extra";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { LazyFile } from "./lazy-file.js";
+import { Paths } from "./data-paths.js";
 
 export interface ExchangeRateRecord {
   currencyAlpha3: string;
@@ -8,16 +8,29 @@ export interface ExchangeRateRecord {
   exchangeRateLastUpdate: string;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const catalogPath = path.resolve(__dirname, "../../catalog/exchangeRates.json");
+const catalogPath = path.join(Paths.catalog, "exchangeRates.json");
 
 export class ExchangeRateCatalog {
   private readonly recordMap = new Map<string, ExchangeRateRecord>();
+  private readonly lazyFile: LazyFile<ExchangeRateRecord[]>;
 
-  constructor(private readonly filePath: string = catalogPath, initialRecords?: ExchangeRateRecord[]) {
-    const records = initialRecords ?? readCatalogFromDisk(filePath);
-    this.ingest(records);
+  constructor(filePath: string = catalogPath) {
+    this.lazyFile = new LazyFile<ExchangeRateRecord[]>(
+      filePath,
+      [],
+      (text) => JSON.parse(text) as ExchangeRateRecord[],
+      (data) => JSON.stringify(data, null, 2)
+    );
+  }
+
+  load(): void {
+    this.lazyFile.load();
+    this.recordMap.clear();
+    for (const record of this.lazyFile.data) {
+      if (record.currencyAlpha3) {
+        this.recordMap.set(normalizeCurrencyCode(record.currencyAlpha3), record);
+      }
+    }
   }
 
   list(): ExchangeRateRecord[] {
@@ -33,43 +46,34 @@ export class ExchangeRateCatalog {
 
   upsert(record: ExchangeRateRecord): void {
     const normalized = normalizeCurrencyCode(record.currencyAlpha3);
-    this.recordMap.set(normalized, {
+    const normalizedRecord = {
       currencyAlpha3: normalized,
       exchangeRateToUSD: record.exchangeRateToUSD,
       exchangeRateLastUpdate: record.exchangeRateLastUpdate
-    });
-  }
-
-  save(): void {
-    fs.writeJsonSync(this.filePath, this.list(), { spaces: 2 });
-  }
-
-  private ingest(records: ExchangeRateRecord[]): void {
-    for (const record of records) {
-      if (!record.currencyAlpha3) {
-        continue;
-      }
-      this.upsert(record);
+    };
+    this.recordMap.set(normalized, normalizedRecord);
+    
+    // Update lazyFile.data array and mark dirty
+    const idx = this.lazyFile.data.findIndex(r => normalizeCurrencyCode(r.currencyAlpha3) === normalized);
+    if (idx >= 0) {
+      this.lazyFile.data[idx] = normalizedRecord;
+    } else {
+      this.lazyFile.data.push(normalizedRecord);
     }
+    this.lazyFile.setDirty(this.lazyFile.data);
+  }
+
+  flush(): void {
+    this.lazyFile.flush();
   }
 }
 
-export function readExchangeRateCatalog(): ExchangeRateCatalog {
+export function createExchangeRateCatalog(): ExchangeRateCatalog {
   return new ExchangeRateCatalog();
 }
 
 export function getExchangeRateCatalogPath(): string {
   return catalogPath;
-}
-
-function readCatalogFromDisk(filePath: string): ExchangeRateRecord[] {
-  try {
-    const data = fs.readJsonSync(filePath) as ExchangeRateRecord[];
-    return Array.isArray(data) ? data : [];
-  } catch (error) {
-    console.warn("Failed to read exchange rate catalog", error);
-    return [];
-  }
 }
 
 function normalizeCurrencyCode(code: string): string {

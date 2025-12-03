@@ -1,38 +1,51 @@
-import type { ParsedCommand } from "./command.js";
-import type { CommandResponse } from "./cmd-help.js";
+import type { WebSearchCommand } from "./command-types.js";
 import { handleGoogleSearch } from "./search.js";
+import { registerCommand } from "./command-registry.js";
+import { CommandError } from "./errors.js";
+import type { CommandContext, CommandHandlerResult } from "./command-context.js";
+import { CommandWithArgs } from "./command.js";
 
-export async function cmdWebsearch(parsed: ParsedCommand): Promise<CommandResponse> {
-  if (parsed.type !== "websearch") {
-    throw new Error("cmdWebsearch called with non-websearch command");
+
+function cmdWebsearch()
+{
+  function parseWebSearch(command: CommandWithArgs): WebSearchCommand {
+    const query = command.args.query;
+    if (!query || !query.trim()) {
+      throw new CommandError("/websearch requires query=\"...\".");
+    }
+    return { commandId: "websearch", query: query.trim() };
   }
 
-  const query = parsed.query;
+  async function handleWebsearch(
+    command: CommandWithArgs,
+    _ctx: CommandContext
+  ): Promise<CommandHandlerResult> {
+    const parsed = parseWebSearch(command);
+    const query = parsed.query;
 
-  try {
-    console.log("Starting Google Custom Search", { query });
-    const { snippets } = await handleGoogleSearch(query);
-    console.log("Google Custom Search finished", { query, snippetCount: snippets.length });
-    const count = snippets.length;
-    const summary = count === 0
-      ? `Web search found no results for "${query}".`
-      : `Web search found ${count} result${count === 1 ? "" : "s"} for "${query}".`;
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        executedCommands: 0,
+    try {
+      console.log("Starting Google Custom Search", { query });
+      const { snippets } = await handleGoogleSearch(query);
+      console.log("Google Custom Search finished", { query, snippetCount: snippets.length });
+      const count = snippets.length;
+      const summary = count === 0
+        ? `Web search found no results for "${query}".`
+        : `Web search found ${count} result${count === 1 ? "" : "s"} for "${query}".`;
+      return {
         message: summary,
-        query,
-        searchResults: snippets
-      }
-    };
-  } catch (error) {
-    return {
-      status: 502,
-      body: {
-        error: error instanceof Error ? error.message : String(error)
-      }
-    };
+        data: {
+          query,
+          searchResults: snippets
+        }
+      };
+    } catch (error) {
+      return {
+        message: error instanceof Error ? error.message : String(error),
+        stopProcessingCommands: true
+      };
+    }
   }
+
+  return { commandId: "websearch", positionalKey: "query", parser: parseWebSearch, handler: handleWebsearch };
 }
+registerCommand(cmdWebsearch());

@@ -29,7 +29,7 @@ RUN npm install --production=false
 COPY tsconfig.base.json ./
 COPY client/ ./client/
 COPY server/ ./server/
-COPY catalog/ ./catalog/
+COPY dataCountries/ ./dataCountries/
 COPY dataConfig/ ./dataConfig/
 
 # Build client and server

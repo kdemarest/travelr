@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import zlib from "node:zlib";
 import { uploadToS3, isS3Enabled } from "./s3-sync.js";
-import { isHotReloadAllowed } from "./config.js";
+import { isHotReloadAllowed, isTestMode, getServerPort } from "./config.js";
 import { removePidFile } from "./pid-file.js";
 import { Paths } from "./data-paths.js";
 import type { AuthenticatedRequest } from "./index.js";
@@ -397,9 +397,14 @@ router.post("/hot-reload", requireAdmin, async (req: Request, res: Response) => 
     console.log(`[HotReload] Log file: ${logFile}`);
     
     // relaunch.ts operates entirely from cwd - no path arguments needed
-    const relaunchArgs = ["tsx", relaunchScript, zipPath, `--log=${logFile}`, `--md5=${actualMd5}`];
+    const relaunchArgs = ["tsx", relaunchScript, zipPath, `--log=${logFile}`, `--md5=${actualMd5}`, `--port=${getServerPort()}`];
     if (testMode) {
       relaunchArgs.push("--test");
+    }
+    if (isTestMode()) {
+      // In test environments (isTest: true in config), skip npm install
+      // to protect junction-linked node_modules from being modified
+      relaunchArgs.push("--noNpmInstall");
     }
     
     const child = spawn("npx", relaunchArgs, {

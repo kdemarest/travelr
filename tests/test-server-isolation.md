@@ -43,7 +43,7 @@ travelr/
 ├── server/dist/index.js       # The server code (shared)
 ├── client/dist/               # Static files (shared)
 ├── scripts/                   # Scripts (shared)
-├── catalog/                   # Static catalog data (shared)
+├── dataCountries/             # Static country/exchange data (shared)
 ├── dataUsers/                 # Dev data (not used in tests)
 ├── dataTrips/                 # Dev data (not used in tests)
 └── TEST_5000/                 # Test environment for port 5000
@@ -130,7 +130,7 @@ export const Paths = {
   codeRoot: path.resolve(__dirname, "../.."),
   get scripts() { return path.join(this.codeRoot, "scripts"); },
   get clientDist() { return path.join(this.codeRoot, "client/dist"); },
-  get catalog() { return path.join(this.codeRoot, "catalog"); },
+  get catalog() { return path.join(this.codeRoot, "dataCountries"); },
 
   // DATA: Where runtime data lives (cwd, isolated in tests)
   dataRoot: process.cwd(),

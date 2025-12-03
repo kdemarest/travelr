@@ -21,7 +21,7 @@ export const Paths = {
   codeRoot: path.resolve(__dirname, "../.."),
   get scripts() { return path.join(this.codeRoot, "scripts"); },
   get clientDist() { return path.join(this.codeRoot, "client/dist"); },
-  get catalog() { return path.join(this.codeRoot, "catalog"); },
+  get catalog() { return path.join(this.codeRoot, "dataCountries"); },
   get serverDist() { return path.join(this.codeRoot, "server/dist"); },
 
   // DATA: Where runtime data lives (cwd, isolated in tests)

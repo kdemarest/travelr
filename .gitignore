@@ -2,6 +2,9 @@
 TEST_*/
 testDirs/
 
+# Windows reserved device name (created by bug, can't delete without admin)
+NUL
+
 # Logs
 logs
 *.log

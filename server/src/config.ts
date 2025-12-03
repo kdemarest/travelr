@@ -18,6 +18,7 @@ interface ServerConfig {
   vitePort?: number;
   writeDiagnosticFiles?: boolean;
   hotReloadAllowed?: boolean;
+  isTest?: boolean;
 }
 
 let cachedConfig: ServerConfig | null = null;
@@ -100,5 +101,14 @@ export function getDataTripsDir(): string {
  */
 export function isHotReloadAllowed(): boolean {
   const config = getConfig();
-  return config.hotReloadAllowed === true;
+  return config.hotReloadAllowed ?? false;
+}
+
+/**
+ * Whether this is a test environment (isTest in config).
+ * Used to skip npm install during hot-reload (protects junction-linked node_modules).
+ */
+export function isTestMode(): boolean {
+  const config = getConfig();
+  return config.isTest ?? false;
 }

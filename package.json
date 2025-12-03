@@ -21,7 +21,9 @@
     "node": ">=24.10.0"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@types/archiver": "^7.0.0",
+    "@types/node-netstat": "^1.8.4",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
     "@typescript-eslint/parser": "^8.48.0",
     "eslint": "^9.39.1",
@@ -32,7 +34,9 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "adm-zip": "^0.5.16",
     "archiver": "^7.0.1",
-    "marked": "^17.0.1"
+    "marked": "^17.0.1",
+    "node-netstat": "^1.9.0"
   }
 }

@@ -21,28 +21,24 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import { execSync, spawn } from "node:child_process";
-import { createReadStream } from "node:fs";
-import { pipeline } from "node:stream/promises";
-import { createWriteStream } from "node:fs";
-
-// We'll use yauzl for zip extraction - it's a dependency-free unzip library
-// But since we want to avoid adding deps, let's use the built-in zlib + manual zip parsing
-// Actually, let's use a simpler approach: extract using Node's built-in capabilities
-
 import crypto from "node:crypto";
+import AdmZip from "adm-zip";
 
 const args = process.argv.slice(2);
 const testMode = args.includes("--test");
+const noNpmInstall = args.includes("--noNpmInstall");
 const logArg = args.find(a => a.startsWith("--log="));
 const md5Arg = args.find(a => a.startsWith("--md5="));
-const filteredArgs = args.filter(a => a !== "--test" && !a.startsWith("--log=") && !a.startsWith("--md5="));
+const portArg = args.find(a => a.startsWith("--port="));
+const filteredArgs = args.filter(a => a !== "--test" && a !== "--noNpmInstall" && !a.startsWith("--log=") && !a.startsWith("--md5=") && !a.startsWith("--port="));
 const zipPath = filteredArgs[0];
+const statusPort = portArg ? parseInt(portArg.replace("--port=", ""), 10) : 80;
 
 // Everything operates from cwd - no special knowledge of directory structure
 const ROOT = process.cwd();
 
 if (!zipPath) {
-  console.error("Usage: npx tsx scripts/relaunch.ts <zipPath> --md5=<hash> [--test] [--log=<path>]");
+  console.error("Usage: npx tsx scripts/relaunch.ts <zipPath> --md5=<hash> [--test] [--noNpmInstall] [--log=<path>] [--port=<port>]");
   process.exit(1);
 }
 
@@ -76,9 +72,10 @@ function sleep(ms: number): Promise<void> {
 
 // ============================================================================
 // MINIMAL STATUS SERVER
-// While relaunch is running, we serve our log file on port 80 so deploy.js
-// can see what's happening. If relaunch fails catastrophically, we keep
+// While relaunch is running, we serve our log file on the same port as the server
+// so deploy.js can see what's happening. If relaunch fails catastrophically, we keep
 // serving forever so the operator can diagnose remotely.
+// Port is passed via --port=<port>, defaulting to 80 for production.
 // ============================================================================
 
 let statusServer: http.Server | null = null;
@@ -86,8 +83,8 @@ let statusServer: http.Server | null = null;
 function startStatusServer(port: number = 80): Promise<void> {
   return new Promise((resolve, reject) => {
     statusServer = http.createServer((req, res) => {
-      // Only respond to our status endpoint
-      if (req.url?.startsWith("/api/admin/hot-reload-status")) {
+      // Only respond to our status endpoint (same path as real server)
+      if (req.url?.startsWith("/admin/hot-reload-status")) {
         res.writeHead(200, { "Content-Type": "text/plain" });
         try {
           const logContent = fs.readFileSync(LOG_FILE, "utf-8");
@@ -98,7 +95,7 @@ function startStatusServer(port: number = 80): Promise<void> {
       } else {
         // For any other request, return 503 with a helpful message
         res.writeHead(503, { "Content-Type": "text/plain" });
-        res.end("[RELAUNCH]\nServer is restarting. Check /api/admin/hot-reload-status for progress.\n");
+        res.end("[RELAUNCH]\nServer is restarting. Check /admin/hot-reload-status for progress.\n");
       }
     });
 
@@ -146,7 +143,7 @@ function stopStatusServer(): Promise<void> {
  * Launch the real server, handling status server lifecycle.
  * 
  * Flow:
- * 1. Stop status server (to free port 80)
+ * 1. Stop status server (to free the port)
  * 2. Spawn real server
  * 3. If spawn succeeds, return true
  * 4. If spawn fails, restart status server and hang forever
@@ -154,13 +151,14 @@ function stopStatusServer(): Promise<void> {
  * Returns true if server launched successfully, never returns if it fails.
  */
 async function launchServerWithRecovery(): Promise<boolean> {
-  // Step 1: Stop status server to free port 80
+  // Step 1: Stop status server to free the port
   await stopStatusServer();
   
   // Step 2: Try to spawn the real server
   try {
     log("Starting server...");
-    const serverProcess = spawn("npm", ["start"], {
+    // Use node directly instead of npm start - avoids shell requirement on Windows
+    const serverProcess = spawn("node", ["server/dist/index.js"], {
       cwd: ROOT,
       detached: true,
       stdio: "ignore",
@@ -174,10 +172,10 @@ async function launchServerWithRecovery(): Promise<boolean> {
     log(`CRITICAL: Failed to start server: ${err}`);
     log("Restarting status server for diagnostics...");
     
-    await startStatusServer(80);
+    await startStatusServer(statusPort);
     
     if (statusServer) {
-      log("Status server restarted on port 80");
+      log(`Status server restarted on port ${statusPort}`);
       log("Query /api/admin/hot-reload-status to see this log.");
       log("Waiting indefinitely... (Ctrl+C or kill to exit)");
       await new Promise(() => {}); // Never resolves
@@ -234,12 +232,11 @@ interface ZipEntry {
 }
 
 /**
- * Parse zip file in memory and return array of file entries.
+ * Parse zip file using adm-zip and return array of file entries.
  * Validates MD5 checksum before parsing.
  * Does not write anything to disk - pure in-memory extraction.
  */
 function parseZipInMemory(zipPath: string, expectedMd5: string): ZipEntry[] {
-  const zlib = require("node:zlib");
   const zipBuffer = fs.readFileSync(zipPath);
   
   // Verify MD5 checksum
@@ -249,48 +246,18 @@ function parseZipInMemory(zipPath: string, expectedMd5: string): ZipEntry[] {
   }
   log(`MD5 verified: ${actualMd5}`);
   
-  const entries: ZipEntry[] = [];
-  let offset = 0;
+  const zip = new AdmZip(zipPath);
+  const zipEntries = zip.getEntries();
   
-  while (offset < zipBuffer.length - 4) {
-    // Look for local file header signature (PK\x03\x04)
-    if (zipBuffer[offset] !== 0x50 || zipBuffer[offset + 1] !== 0x4B) {
-      break;
-    }
-    if (zipBuffer[offset + 2] !== 0x03 || zipBuffer[offset + 3] !== 0x04) {
-      // Not a local file header, might be central directory
-      break;
-    }
-    
-    // Parse local file header
-    const compressionMethod = zipBuffer.readUInt16LE(offset + 8);
-    const compressedSize = zipBuffer.readUInt32LE(offset + 18);
-    const fileNameLength = zipBuffer.readUInt16LE(offset + 26);
-    const extraFieldLength = zipBuffer.readUInt16LE(offset + 28);
-    
-    const fileNameStart = offset + 30;
-    const fileName = zipBuffer.toString("utf-8", fileNameStart, fileNameStart + fileNameLength);
-    const dataStart = fileNameStart + fileNameLength + extraFieldLength;
-    
+  const entries: ZipEntry[] = [];
+  for (const entry of zipEntries) {
     // Skip directories
-    if (!fileName.endsWith("/")) {
-      const compressedData = zipBuffer.subarray(dataStart, dataStart + compressedSize);
-      
-      let fileData: Buffer;
-      if (compressionMethod === 0) {
-        // Stored (no compression)
-        fileData = compressedData;
-      } else if (compressionMethod === 8) {
-        // Deflate
-        fileData = zlib.inflateRawSync(compressedData);
-      } else {
-        throw new Error(`Unsupported compression method: ${compressionMethod} for ${fileName}`);
-      }
-      
-      entries.push({ fileName, data: fileData });
-    }
+    if (entry.isDirectory) continue;
     
-    offset = dataStart + compressedSize;
+    entries.push({
+      fileName: entry.entryName,
+      data: entry.getData()
+    });
   }
   
   return entries;
@@ -357,11 +324,11 @@ async function main() {
     }
     
     // Step 2: Start minimal status server so deploy.js can see our progress
-    // Skip in test mode - port 80 requires admin on Windows
-    if (testMode) {
-      log("[TEST] Status server would start on port 80 now");
+    // Skip in test mode on Windows if port 80 (requires admin)
+    if (testMode && statusPort === 80) {
+      log("[TEST] Status server would start on port 80 now (requires admin)");
     } else {
-      await startStatusServer(80);
+      await startStatusServer(statusPort);
     }
     
     // Step 3: Parse zip in memory (no temp files), verify MD5
@@ -417,6 +384,8 @@ async function main() {
     if (needsInstall) {
       if (testMode) {
         log("[TEST] Would run npm install");
+      } else if (noNpmInstall) {
+        log("[SKIP] npm install skipped (--noNpmInstall flag, protects junction-linked node_modules)");
       } else {
         log("Running npm install...");
         execSync("npm install", { cwd: ROOT, stdio: "inherit" });
@@ -463,7 +432,7 @@ async function main() {
       log("CRITICAL: App directory was modified before failure.");
       log("Code on disk may be corrupt or incomplete.");
       log("DO NOT restart server - manual intervention required.");
-      log("Status server will keep running on port 80 for diagnostics.");
+      log(`Status server will keep running on port ${statusPort} for diagnostics.`);
       log("Query /api/admin/hot-reload-status to see this log.");
       log("=".repeat(60));
       

@@ -44,15 +44,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn, ChildProcess } from "node:child_process";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createDeploymentZip } from "../scripts/create-deploy-zip.js";
+import { createDeploymentZip } from "../scripts/create-quick-deploy-zip.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_ROOT = path.resolve(__dirname, "..");
 
-// Port is dynamically assigned by testsvr.ts (5000-5999)
+// Port is dynamically assigned by testsvr.ts (60000-60999)
 let TEST_PORT = 0;
 let TEST_SERVER = "";
 
@@ -91,60 +91,49 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Track spawned server for cleanup
-let spawnedServer: ChildProcess | null = null;
+/**
+ * Run testsvr command synchronously.
+ */
+function runTestsvr(args: string[]): { stdout: string; exitCode: number } {
+  const script = path.join(APP_ROOT, "scripts", "testsvr.ts");
+  try {
+    const result = execSync(`npx tsx "${script}" ${args.join(" ")}`, {
+      cwd: APP_ROOT,
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return { stdout: result, exitCode: 0 };
+  } catch (err: any) {
+    return { stdout: err.stdout || "", exitCode: err.status || 1 };
+  }
+}
 
 /**
- * Spawn an isolated test server on a dynamic port (5000-5999) using testsvr.ts.
- * The helper handles building, creates isolated TEST_<port>/ directory, and signals READY <port>.
+ * Spawn an isolated test server using testsvr.ts.
+ * testsvr -spawn exits after the server is ready, server keeps running.
  */
 async function spawnTestServer(): Promise<void> {
   logInfo(`Starting isolated test server...`);
   
-  const helperScript = path.join(__dirname, "testsvr.ts");
+  // Run testsvr -spawn -copycode and capture output
+  const { stdout, exitCode } = runTestsvr(["-spawn", "-copycode"]);
   
-  spawnedServer = spawn("npx", ["tsx", helperScript], {
-    cwd: APP_ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: true
-  });
-  
-  // Forward stderr (server output) with prefix
-  spawnedServer.stderr?.on("data", (data) => {
-    const lines = data.toString().split("\n").filter((l: string) => l.trim());
-    for (const line of lines) {
-      log(`  ${line}`, colors.gray);
-    }
-  });
-  
-  // Wait for READY <port> signal on stdout
-  const port = await new Promise<number>((resolve) => {
-    const timeout = setTimeout(() => resolve(0), 60000);
-    
-    spawnedServer?.stdout?.on("data", (data) => {
-      const text = data.toString();
-      const match = text.match(/READY\s+(\d+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(parseInt(match[1], 10));
-      }
-    });
-    
-    spawnedServer?.on("close", () => {
-      clearTimeout(timeout);
-      resolve(0);
-    });
-  });
-  
-  if (!port) {
-    throw new Error("Test server did not start within 60 seconds");
+  if (exitCode !== 0) {
+    throw new Error("testsvr -spawn failed");
   }
+  
+  const match = stdout.match(/READY\s+(\d+)/);
+  if (!match) {
+    throw new Error("No READY signal in testsvr output");
+  }
+  
+  const port = parseInt(match[1], 10);
   
   // Set the dynamic port
   TEST_PORT = port;
   TEST_SERVER = `http://localhost:${TEST_PORT}`;
   
-  // Double-check server is actually responding before proceeding
+  // Double-check server is actually responding
   await sleep(500);
   try {
     const pingResp = await fetch(`${TEST_SERVER}/ping`, { signal: AbortSignal.timeout(2000) });
@@ -159,18 +148,29 @@ async function spawnTestServer(): Promise<void> {
 }
 
 /**
- * Kill the spawned test server if it's still running.
+ * Kill and remove the test server via testsvr -remove.
  */
-function killTestServer(): void {
-  if (spawnedServer && !spawnedServer.killed) {
-    logInfo("Killing test server...");
-    spawnedServer.kill("SIGTERM");
-    spawnedServer = null;
+function cleanupTestServer(): void {
+  if (TEST_PORT) {
+    logInfo(`Cleaning up test server on port ${TEST_PORT}...`);
+    runTestsvr(["-remove", String(TEST_PORT)]);
+    TEST_PORT = 0;
   }
 }
 
-// Cleanup on exit
-process.on("exit", killTestServer);
+/**
+ * Just kill the server, leave directory for debugging.
+ */
+function killTestServer(): void {
+  if (TEST_PORT) {
+    logInfo(`Killing test server on port ${TEST_PORT} (leaving directory for debugging)...`);
+    runTestsvr(["-kill", String(TEST_PORT)]);
+    logInfo(`Test directory preserved: testDirs/TEST_${TEST_PORT}/`);
+    TEST_PORT = 0;
+  }
+}
+
+// Cleanup on exit - just kill, don't remove (preserve for debugging)
 process.on("SIGINT", () => { killTestServer(); process.exit(1); });
 process.on("SIGTERM", () => { killTestServer(); process.exit(1); });
 
@@ -202,14 +202,48 @@ async function authenticate(): Promise<string> {
 /**
  * Wait for server to come back up.
  */
-async function waitForServer(maxWaitMs = 60000): Promise<boolean> {
+async function waitForServer(maxWaitMs = 60000, authKey?: string): Promise<boolean> {
   const startTime = Date.now();
   const pollInterval = 2000;
+  let seenLineCount = 0;  // Track how many lines we've already printed
   
   logInfo("Waiting for server to restart...");
   
   while (Date.now() - startTime < maxWaitMs) {
     const elapsed = Math.round((Date.now() - startTime) / 1000);
+    let gotStatus = false;
+    
+    // Try to get status from relaunch.ts status server (runs on same port during restart)
+    if (authKey) {
+      try {
+        const statusResp = await fetch(`${TEST_SERVER}/admin/hot-reload-status`, {
+          headers: {
+            "x-auth-user": "deploybot",
+            "x-auth-device": "test-hot-reload",
+            "x-auth-key": authKey
+          },
+          signal: AbortSignal.timeout(2000)
+        });
+        if (statusResp.ok) {
+          gotStatus = true;
+          const statusText = await statusResp.text();
+          // Filter out empty lines and [RELAUNCH]/[SERVER] prefix lines
+          const lines = statusText.split("\n").filter(l => 
+            l.trim() && !l.startsWith("[RELAUNCH]") && !l.startsWith("[SERVER]")
+          );
+          // Print only new lines we haven't seen yet
+          const newLines = lines.slice(seenLineCount);
+          for (const line of newLines) {
+            log(`  ${elapsed}s - ${line}`, colors.gray);
+          }
+          seenLineCount = lines.length;
+        }
+      } catch {
+        // Connection refused, timeout, etc. - server is down, which is expected
+      }
+    }
+    
+    // Check if server is fully up via /ping
     try {
       const response = await fetch(`${TEST_SERVER}/ping`, {
         signal: AbortSignal.timeout(2000)
@@ -222,9 +256,12 @@ async function waitForServer(maxWaitMs = 60000): Promise<boolean> {
         }
       }
     } catch {
-      // Server not ready yet
+      // Server not ready yet - expected during restart
     }
-    log(`  ${elapsed}s - waiting...`, colors.gray);
+    
+    if (!gotStatus) {
+      log(`  ${elapsed}s - waiting...`, colors.gray);
+    }
     await sleep(pollInterval);
   }
   
@@ -293,13 +330,15 @@ async function main() {
     const zipStats = fs.statSync(zipPath);
     logSuccess(`Created ${(zipStats.size / 1024).toFixed(1)} KB zip at ${zipPath}`);
     
-    // Step 4: POST to hot-reload endpoint with test=true
-    logInfo("Sending zip to /admin/hot-reload?test=true...");
+    // Step 4: POST to hot-reload endpoint
+    // NOTE: We do NOT use ?test=true here. This is a real hot-reload, just in an
+    // isolated TEST_* directory. We want files to actually be written, rebuilt, etc.
+    logInfo("Sending zip to /admin/hot-reload...");
     const zipBuffer = fs.readFileSync(zipPath);
     const zipMd5 = crypto.createHash("md5").update(zipBuffer).digest("hex");
     logInfo(`Zip MD5: ${zipMd5}`);
     
-    const hotReloadResp = await fetch(`${TEST_SERVER}/admin/hot-reload?test=true`, {
+    const hotReloadResp = await fetch(`${TEST_SERVER}/admin/hot-reload`, {
       method: "POST",
       headers: {
         "x-auth-user": "deploybot",
@@ -334,9 +373,9 @@ async function main() {
     // The server will shut down and relaunch.ts will restart it
     await sleep(1000); // Give server time to start shutdown
     
-    const serverBack = await waitForServer(60000);
+    const serverBack = await waitForServer(20000, authKey);
     if (!serverBack) {
-      logError("Server did not come back up within 60 seconds");
+      logError("Server did not come back up within 20 seconds");
       logError("Check the relaunch log for errors");
       if (result.logFile) {
         logInfo(`Log file: ${result.logFile}`);
@@ -372,7 +411,11 @@ async function main() {
         logSuccess("No errors in relaunch log");
       }
       
-      // Step 7: Verify status endpoint matches log file
+      // Step 7: Re-authenticate after restart (new server instance)
+      logInfo("Re-authenticating after restart...");
+      authKey = await authenticate();
+      
+      // Step 8: Verify status endpoint matches log file
       logInfo("Verifying /admin/hot-reload-status matches log file...");
       try {
         const statusResp = await fetch(`${TEST_SERVER}/admin/hot-reload-status`, {
@@ -432,11 +475,11 @@ async function main() {
     log("Files were NOT overwritten (test mode).\n", colors.gray);
     
     // Clean up: kill the test server
-    killTestServer();
+    cleanupTestServer();
     
   } catch (err) {
     logError(`Test failed: ${err}`);
-    killTestServer();
+    killTestServer();  // Leave directory for debugging
     process.exit(1);
   }
 }

@@ -129,7 +129,7 @@ The deploy script:
 | `dataUsers/` | User accounts and auth data |
 | `dataDiagnostics/` | Debug logs (`last_request.txt`, etc.) |
 | `dataConfig/` | Environment configs and prompt template |
-| `catalog/` | Static reference data (countries, exchange rates) |
+| `dataCountries/` | Static reference data (countries, exchange rates) |
 | `deploy/` | Dockerfile and docker-compose for deployment |
 
 ## User Management

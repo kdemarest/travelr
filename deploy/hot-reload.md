@@ -66,7 +66,7 @@ Whitelist approach - only these are included:
 - `dataConfig/prompt-template.md` - Chatbot prompt
 
 **Excluded** (intentionally):
-- `catalog/*.json` - Static data, rarely changes
+- `dataCountries/*.json` - Static data, rarely changes
 - `dataConfig/config.*.json` - Environment-specific, already on server
 - `node_modules/` - Reinstalled if package.json changes
 - `dataUsers/`, `dataTrips/` - Runtime data, never overwritten
